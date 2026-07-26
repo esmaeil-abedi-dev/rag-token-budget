@@ -58,12 +58,24 @@ def main():
     ap.add_argument("--yes", action="store_true", help="skip the spend confirmation")
     args, _ = ap.parse_known_args()
 
-    if OUT_CSV.exists() and not args.force:
-        print("[04c] exists, skipping")
-        return
+    # skip only when a previous run processed AT LEAST this many input
+    # questions (recorded in the manifest) — a --limit smoke run must never
+    # freeze the full deliverable
+    import json as _json
 
-    from common import n_tokens
+    from common import MANIFEST_PATH, n_tokens
     from retrieval_ctx import RetrievalContext
+
+    n_want = len(pd.read_parquet(DATA / "questions_primary_clean.parquet"))
+    if args.limit:
+        n_want = min(n_want, args.limit)
+    if OUT_CSV.exists() and not args.force:
+        prev_manifest = _json.loads(MANIFEST_PATH.read_text()) if MANIFEST_PATH.exists() else {}
+        n_prev = prev_manifest.get("stage04c", {}).get("n_input_questions", 0)
+        if n_prev >= n_want:
+            print(f"[04c] previous run covered {n_prev} input questions >= {n_want}, skipping")
+            return
+        print(f"[04c] previous run covered only {n_prev} < {n_want} input questions — re-running")
 
     ctx = RetrievalContext()
     ev = pd.read_parquet(DATA / "eval_records.parquet")
@@ -112,6 +124,9 @@ def main():
           f"(skipped: {skipped_no_assembly} no cached assembly, "
           f"{skipped_no_gold} no gold in selected set, "
           f"{skipped_over_budget} BPE-jitter over budget)")
+    if not jobs:
+        raise SystemExit("[04c] nothing to ablate — run the primary sweep first "
+                         "(all questions skipped; see counts above)")
     if not args.yes:
         resp = input(f"[04c] ~{len(jobs)} paid generations + judging. Proceed? [y/N] ")
         if resp.strip().lower() not in ("y", "yes"):
@@ -151,8 +166,11 @@ def main():
     fig.tight_layout()
     fig.savefig(OUT_FIG, dpi=300)
 
+    df.to_parquet(DATA / "position_records.parquet", index=False)
     update_manifest(stage04c=dict(
-        best_arm=best_arm, n_questions=len(df) // 3,
+        best_arm=best_arm, overall_best_arm=overall_best,
+        disclosure=note.strip() or "best selection arm was also the overall best",
+        n_input_questions=len(qp), n_questions=len(df) // 3,
         skipped_no_assembly=skipped_no_assembly,
         skipped_no_gold_in_selection=skipped_no_gold,
         skipped_over_budget=skipped_over_budget))

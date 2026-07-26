@@ -72,6 +72,10 @@ def project_cost(n_primary: int, n_structured: int, sweeps: list[str]) -> float:
         recomp_cost = len(BUDGETS) * n_q * (2 * avg_ctx * PRICE_GEN_IN + avg_ctx * PRICE_GEN_OUT) / 1e6
         rerank_cost = n_q * PRICE_RERANK_SEARCH
         sweep_total = gen_cost + judge_cost + recomp_cost + rerank_cost
+        if sweep == "primary":  # hops=1 sensitivity block rides on the primary sweep
+            sens = n_q * ((1000 + 90) * PRICE_GEN_IN + 40 * PRICE_GEN_OUT
+                          + (1000 + 260) * PRICE_JUDGE_IN + 60 * PRICE_JUDGE_OUT) / 1e6
+            sweep_total += sens
         total += sweep_total
         lines.append(f"  {sweep:11s} {n_gen:6d} generations  "
                      f"gen ${gen_cost:5.2f} + judge ${judge_cost:5.2f} + "
@@ -123,7 +127,6 @@ def main():
     ctx = RetrievalContext()
     t_start = time.time()
     spent = 0.0
-    frames = []
 
     # Tier-1-first ordering inside each sweep: sort questions so HotpotQA/
     # MultiHop-RAG/SQuAD run before Tier 2/3 — an interruption costs breadth,
@@ -133,13 +136,22 @@ def main():
     q_primary.sort(key=lambda q: tier.get(q["dataset"], 3))
 
     def uncached_cost(df: pd.DataFrame) -> float:
-        """This-run spend: cached generations/judgements replay their catalog
-        cost_usd but cost nothing now — count only uncached rows."""
-        gen = df.loc[~df["gen_cached"].astype(bool), "cost_gen_usd"].sum()
+        """This-run spend only: checkpoint-resumed blocks and cached calls
+        replay their historical cost_usd but cost nothing now."""
+        if "resumed_from_checkpoint" in df and df["resumed_from_checkpoint"].all():
+            return 0.0
+        live = df[~df.get("resumed_from_checkpoint", pd.Series(False, index=df.index))]
+        gen = live.loc[~live["gen_cached"].astype(bool), "cost_gen_usd"].sum()
         judge = 0.0
-        if "judge_cached" in df:
-            judge = df.loc[~df["judge_cached"].astype(bool), "judge_cost_usd"].sum()
-        asm = df["cost_assembly_usd"].sum()  # arms already zero cached reuses
+        if "judge_cached" in live:
+            judge = live.loc[~live["judge_cached"].astype(bool), "judge_cost_usd"].sum()
+        # rerank zeroes cached reuses itself; RECOMP marks summary_cached in meta
+        asm = 0.0
+        for _, r in live.iterrows():
+            if r["cost_assembly_usd"]:
+                meta = json.loads(r["arm_meta"]) if r["arm_meta"] else {}
+                if not meta.get("summary_cached", False):
+                    asm += r["cost_assembly_usd"]
         return float(gen + judge + asm)
 
     for sweep, questions in (("primary", q_primary), ("structured", q_structured)):
@@ -152,7 +164,6 @@ def main():
                                ctx=ctx, workers=args.workers, force=args.force)
                 block_cost = uncached_cost(df)
                 spent += block_cost
-                frames.append(df)
                 print(f"[05] {sweep:10s} {arm:22s} b={budget:5d}  n={len(df)}  "
                       f"EM={df['em'].mean():.3f} F1={df['f1'].mean():.3f}  "
                       f"${block_cost:.3f}  {time.time()-t0:.0f}s  (total ${spent:.2f})")
@@ -165,42 +176,77 @@ def main():
                        budget=1000, ctx=ctx, workers=args.workers, force=args.force,
                        arm_label="graph_select_h1", arm_kwargs={"hops": 1})
         spent += uncached_cost(df)
-        frames.append(df)
         print(f"[05] sensitivity graph hops=1 b=1000 n={len(df)} EM={df['em'].mean():.3f}")
 
-    # Rebuild eval_records from ALL checkpoints on disk, not just this
-    # invocation's frames — a later `--sweep structured` run must never clobber
-    # the primary sweep out of the file.
-    ckpts = sorted(PARTIAL_DIR.glob("*.parquet"))
-    all_df = (pd.concat([pd.read_parquet(p) for p in ckpts], ignore_index=True)
-              if ckpts else pd.DataFrame())
+    # Rebuild eval_records from checkpoints on disk (so a later restricted run
+    # can never clobber earlier sweeps out of the file) — but with a coverage
+    # guard: a stale --limit smoke checkpoint for a block NOT touched this run
+    # must be QUARANTINED, not silently reported as a real sweep.
+    full_ids = {
+        "primary": set(pd.read_parquet(DATA / "questions_primary_clean.parquet")["question_id"]),
+        "structured": set(pd.read_parquet(DATA / "questions_structured_clean.parquet")["question_id"]),
+    }
+    full_ids["sensitivity_h1"] = full_ids["primary"]
+    # under --limit / --tier1-only, THIS run's reduced sets are the expectation
+    this_run_ids = {"primary": {q["question_id"] for q in q_primary},
+                    "structured": {q["question_id"] for q in q_structured},
+                    "sensitivity_h1": {q["question_id"] for q in q_primary}}
+    reduced = bool(args.limit or args.tier1_only)
+
+    frames_ok, quarantined = [], []
+    for p in sorted(PARTIAL_DIR.glob("*.parquet")):
+        cdf_ = pd.read_parquet(p)
+        sweep_name = p.name.split("__")[0]
+        expected = (this_run_ids if reduced else full_ids).get(sweep_name)
+        if expected is None or expected <= set(cdf_["question_id"]):
+            frames_ok.append(cdf_)
+        else:
+            quarantined.append(p.name)
+    if quarantined:
+        print(f"[05] WARNING: {len(quarantined)} under-covered checkpoints EXCLUDED "
+              f"from eval_records (smoke residue): {quarantined}")
+    all_df = pd.concat(frames_ok, ignore_index=True) if frames_ok else pd.DataFrame()
     if len(all_df):
         all_df.to_parquet(EVAL_RECORDS, index=False)
-        print(f"[05] eval_records rebuilt from {len(ckpts)} checkpoints: {len(all_df)} records")
+        print(f"[05] eval_records rebuilt from {len(frames_ok)} checkpoints: "
+              f"{len(all_df)} records ({int(all_df.get('failed', pd.Series(dtype=bool)).sum())} failed, disclosed)")
 
     # judge spot-check sample (Synopsis promises ~50 hand-verified judgements
     # with a reported agreement rate). Includes the judged context so a human
     # CAN verify, plus empty columns for the human verdict; 08_summary computes
     # the agreement rate once they are filled in.
-    if len(all_df):
+    spot_path = OUTPUTS / "judge_spot_check_sample.csv"
+    existing_spot = pd.read_csv(spot_path) if spot_path.exists() else None
+    has_human_work = (existing_spot is not None and "human_agrees" in existing_spot
+                      and existing_spot["human_agrees"].astype(str).str.strip()
+                      .isin(["yes", "no"]).any())
+    if has_human_work:
+        print("[05] judge_spot_check_sample.csv contains hand-entered verdicts — NOT overwriting")
+    elif len(all_df):
         from common import cache_get_json
+        from runner import corpus_fingerprint
 
         rng = np.random.default_rng(SEED)
         judged = all_df[(all_df["judge_parse_ok"] == True)  # noqa: E712
-                        & all_df["sweep"].isin(["primary", "structured"])]
+                        & all_df["sweep"].isin(["primary", "structured"])
+                        & ~all_df.get("failed", False)]
         sample = judged.iloc[rng.permutation(len(judged))[:50]].copy()
 
-        def ctx_snippet(row):
-            a = cache_get_json("assembled", f"{row['arm']}_{row['budget']}_{row['question_id']}")
-            return (a or {}).get("text", "")[:2000]
+        def ctx_full(row):
+            # FULL context — the human verifies faithfulness against what the
+            # judge actually saw, not a 2k-char stub
+            a = cache_get_json(
+                "assembled",
+                f"{corpus_fingerprint()}_{row['arm']}_{row['budget']}_{row['question_id']}")
+            return (a or {}).get("text", "")
 
-        sample["context_snippet"] = sample.apply(ctx_snippet, axis=1)
+        sample["context"] = sample.apply(ctx_full, axis=1)
         sample["human_faithfulness"] = ""  # to be filled by hand
         sample["human_agrees"] = ""        # yes/no, to be filled by hand
-        sample[["question_id", "sweep", "arm", "budget", "context_snippet",
+        sample[["question_id", "sweep", "arm", "budget", "context",
                 "predicted_answer", "gold_answer", "em", "f1", "faithfulness",
                 "answer_relevance", "human_faithfulness", "human_agrees"]].to_csv(
-            OUTPUTS / "judge_spot_check_sample.csv", index=False)
+            spot_path, index=False)
 
     elapsed = (time.time() - t_start) / 60
     summary = (f"records: {len(all_df)}  |  actual spend this run: ${spent:.2f}  |  "

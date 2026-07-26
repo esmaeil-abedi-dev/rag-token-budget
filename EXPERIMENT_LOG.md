@@ -312,3 +312,14 @@ reproducibility) audited docs + code + real artifacts. 1 CRITICAL, ~12 MAJOR,
   failures. All round-1 artifact invariant failures verified fixed.
 
 Round 2 (full re-review by fresh agents) launching next.
+
+---
+
+## 2026-07-26 13:56 — Stage 02 clean — run complete
+
+```
+questions: primary 600, structured 600
+corpus: 25957 passages -> 72967 chunks (mean 109.4 tokens; 12310 structured)
+gold coverage: primary questions with >=1 matched gold passage: 600/600
+```
+Full step log in outputs/data_cleaning_log.csv.

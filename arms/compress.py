@@ -87,7 +87,9 @@ def _fallback_sentence_prune(question: str, joined: str, budget: int) -> str:
 def compress_llmlingua(question, candidates, budget, **ctx):
     ordered = sorted(candidates, key=lambda c: -c.score)
     joined = SEP.join(c.text for c in ordered)
-    assembly_in = sum(c.n_tokens for c in ordered) + n_tokens(question)
+    # pool read only: LLMLingua-2 is question-agnostic, so the question is
+    # never part of what the compressor consumes
+    assembly_in = sum(c.n_tokens for c in ordered)
 
     t0 = time.time()
     comp = _get_compressor()
@@ -121,5 +123,7 @@ def compress_llmlingua(question, candidates, budget, **ctx):
         "compress_llmlingua", text, [c.chunk_id for c in ordered], budget,
         assembly_input_tokens=assembly_in,
         assembly_latency_s=round(latency, 3),
-        meta={"method": method, "fallback": FALLBACK_ACTIVE},
+        # per-call truth, not the sticky global: one runtime failure must not
+        # mislabel later successful LLMLingua calls as fallbacks
+        meta={"method": method, "fallback": method.startswith("FALLBACK")},
     )

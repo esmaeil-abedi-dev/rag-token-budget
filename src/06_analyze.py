@@ -64,7 +64,8 @@ def two_prop(m: pd.DataFrame) -> dict:
 
     n = len(m)
     x1, x2 = int(m.em_a.sum()), int(m.em_b.sum())
-    stat, p = proportions_ztest([x1, x2], [n, n])
+    with np.errstate(invalid="ignore"):  # degenerate cells -> NaN p, handled by bh_adjust
+        stat, p = proportions_ztest([x1, x2], [n, n])
     p1, p2 = x1 / n, x2 / n
     diffs = []
     idx = RNG.integers(0, n, size=(2000, n))
@@ -102,12 +103,10 @@ def results_table(df: pd.DataFrame) -> pd.DataFrame:
     out = []
     for (sweep, arm, budget), g in df.groupby(["sweep", "arm", "budget"]):
         g = g.sort_values("question_id")
-        idx = RNG.integers(0, len(g), size=(N_BOOT, len(g)))
-        em = g["em"].to_numpy().astype(float)
-        f1 = g["f1"].to_numpy()
-        em_lo, em_hi = boot_ci(em, idx)
-        f1_lo, f1_hi = boot_ci(f1, idx)
         for hop, gg in [("all", g)] + list(g.groupby("hop_type")):
+            idx = RNG.integers(0, len(gg), size=(N_BOOT, len(gg)))
+            em_lo, em_hi = boot_ci(gg["em"].to_numpy().astype(float), idx)
+            f1_lo, f1_hi = boot_ci(gg["f1"].to_numpy().astype(float), idx)
             row = dict(
                 sweep=sweep, arm=arm, budget=budget, hop_type=hop, n=len(gg),
                 em=round(gg["em"].mean(), 4), f1=round(gg["f1"].mean(), 4),
@@ -121,13 +120,14 @@ def results_table(df: pd.DataFrame) -> pd.DataFrame:
                                            + gg.get("judge_cost_usd", 0)).mean()), 6),
                 mean_latency_s=round(float((gg["latency_gen_s"]
                                             + gg["latency_assembly_s"]).mean()), 3),
+                # bootstrap CIs on EVERY reported accuracy (brief), incl. hops
+                em_ci_lo=round(em_lo, 4), em_ci_hi=round(em_hi, 4),
+                f1_ci_lo=round(f1_lo, 4), f1_ci_hi=round(f1_hi, 4),
             )
             if hop == "all":
                 # APT unit is EM per 1,000 input tokens — stated in the column
                 # name so nobody misreads the prereg definition's raw ratio
-                row.update(em_ci_lo=round(em_lo, 4), em_ci_hi=round(em_hi, 4),
-                           f1_ci_lo=round(f1_lo, 4), f1_ci_hi=round(f1_hi, 4),
-                           apt_generator_per_1k=round(
+                row.update(apt_generator_per_1k=round(
                                row["em"] / max(row["mean_gen_input_tokens"], 1) * 1000, 4),
                            apt_total_per_1k=round(
                                row["em"] / max(row["mean_total_tokens"], 1) * 1000, 4))
@@ -175,10 +175,11 @@ def fig_pareto(res: pd.DataFrame):
                 continue
             ax.plot(g[xcol], g["em"], marker="o", label=arm)
             pts += list(zip(g[xcol], g["em"]))
-        # Pareto frontier: not dominated (someone with <= tokens and >= EM)
-        frontier = [p for p in pts
+        # Pareto frontier: not dominated (someone with <= tokens and >= EM);
+        # index comparison so coincident points don't exempt each other
+        frontier = [p for i, p in enumerate(pts)
                     if not any((q[0] <= p[0] and q[1] > p[1]) or (q[0] < p[0] and q[1] >= p[1])
-                               for q in pts if q != p)]
+                               for j, q in enumerate(pts) if j != i)]
         frontier.sort()
         if frontier:
             fx, fy = zip(*frontier)
@@ -222,9 +223,11 @@ def fig_hop_breakdown(res: pd.DataFrame):
         for arm in ARM_ORDER:
             g = sub[sub.arm == arm].sort_values("budget")
             if len(g):
-                ax.plot(g["budget"], g["em"], marker="o", label=arm)
+                yerr = np.clip([g["em"] - g["em_ci_lo"], g["em_ci_hi"] - g["em"]], 0, None)
+                ax.errorbar(g["budget"], g["em"], yerr=yerr, marker="o", capsize=3, label=arm)
         ax.set_xscale("log"); ax.set_xticks(BUDGETS); ax.set_xticklabels(BUDGETS)
-        ax.set_title(f"{hop}-hop questions"); ax.set_xlabel("token budget"); ax.grid(alpha=0.3)
+        ax.set_title(f"{hop}-hop questions (95% bootstrap CIs)")
+        ax.set_xlabel("token budget"); ax.grid(alpha=0.3)
     axes[0].set_ylabel("Exact match"); axes[0].legend(fontsize=8)
     fig.suptitle("RQ2 — single-hop vs multi-hop (primary sweep)")
     fig.tight_layout()
@@ -270,7 +273,7 @@ def fig_structured_vs_prose(df: pd.DataFrame):
     ax.bar(x - w / 2, pm, w, label="prose (primary sweep)")
     ax.bar(x + w / 2, sm, w, label="structured (RQ4 sweep)")
     for i, (a, b) in enumerate(zip(pm, sm)):
-        if a and not np.isnan(a) and b and not np.isnan(b):
+        if pd.notna(a) and pd.notna(b):  # EM of exactly 0.0 still gets its delta
             ax.annotate(f"{(b - a):+.2f}", (x[i], max(a, b) + 0.01), ha="center", fontsize=8)
     ax.set_xticks(x); ax.set_xticklabels(arms, rotation=20, ha="right")
     ax.set_ylabel("Exact match (pooled over budgets)")
@@ -313,11 +316,17 @@ def run_tests(df: pd.DataFrame) -> list[dict]:
     rows: list[dict] = []
 
     def add(rq, comparison, test, budget, d: dict, effect_name, effect, ci=(None, None),
-            n=None, primary=False, note=""):
+            n=None, primary=False, note="", effect_dz=None):
+        if test == "two_proportion_z":
+            note = (note + " | " if note else "") + (
+                "h CI is paired-bootstrap; p is the pre-registered UNPAIRED z — "
+                "they can disagree under within-question correlation; McNemar "
+                "carries the paired inference")
         rows.append(dict(rq=rq, comparison=comparison, test=test, budget=budget,
                          statistic=d.get("statistic"), p_raw=d["p"], p_adj=None,
                          effect_name=effect_name, effect=effect,
                          effect_ci_lo=ci[0], effect_ci_hi=ci[1],
+                         effect_dz=effect_dz,  # standardized paired effect for 07
                          n=n or d.get("n"), n_discordant_b=d.get("b"),
                          n_discordant_c=d.get("c"), primary_comparison=primary,
                          note=note))
@@ -363,7 +372,8 @@ def run_tests(df: pd.DataFrame) -> list[dict]:
                 n=len(m), primary=(budget == PRIMARY_BUDGET and other == "naive_topk"))
 
     # Sensitivity disclosure: graph hops=1 vs hops=2 at the 1000 budget
-    sens = df[df.sweep == "sensitivity_h1"]
+    sens = df[(df.sweep == "sensitivity_h1") & (df.budget == PRIMARY_BUDGET)
+              & (df.arm == "graph_select_h1")]
     if len(sens):
         both = prim[(prim.arm == "graph_select") & (prim.budget == PRIMARY_BUDGET)][
             ["question_id", "em", "f1"]].merge(
@@ -383,7 +393,17 @@ def run_tests(df: pd.DataFrame) -> list[dict]:
     for hop, g in prim[prim.arm.isin(SYNOPSIS_ARMS)].groupby("hop_type"):
         per_q = g.pivot_table(index="question_id", columns="budget", values="f1",
                               aggfunc="mean")  # mean over arms -> one row/question
-        per_q = per_q.dropna()
+        counts = g.pivot_table(index="question_id", columns="budget", values="f1",
+                               aggfunc="count")
+        # Amendment 1 says "F1 averaged over the 5 arms": a question missing any
+        # arm at any budget would mix arm compositions into its slope — drop it
+        # and disclose rather than average unequal sets
+        complete = counts.eq(len(SYNOPSIS_ARMS)).all(axis=1)
+        n_incomplete = int((~complete).sum())
+        if n_incomplete:
+            print(f"  [06] RQ2 {hop}: {n_incomplete} questions dropped "
+                  f"(incomplete arm coverage; disclosed)")
+        per_q = per_q[complete].dropna()
         if not len(per_q):
             continue
         x = np.log2(np.array(BUDGETS, dtype=float))
@@ -395,10 +415,12 @@ def run_tests(df: pd.DataFrame) -> list[dict]:
         idx = RNG.integers(0, len(diffs), size=(2000, len(diffs)))
         ci = (float(np.percentile(diffs[idx].mean(axis=1), 2.5)),
               float(np.percentile(diffs[idx].mean(axis=1), 97.5)))
+        sd_diff = float(diffs.std(ddof=1))
         add("RQ2", f"{hop}: mean-arm F1@4000 vs F1@500 (paired by question)",
             "paired_t", "500vs4000",
             dict(statistic=float(t), p=float(p)), "mean_diff",
-            float(diffs.mean()), ci=ci, n=len(per_q))
+            float(diffs.mean()), ci=ci, n=len(per_q),
+            effect_dz=(float(diffs.mean()) / sd_diff) if sd_diff > 0 else None)
     if "multi" in slopes and "single" in slopes:
         sm, ss = slopes["multi"], slopes["single"]
         t, p = sps.ttest_ind(sm, ss, equal_var=False)
@@ -473,10 +495,19 @@ def confound_checks(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def main():
-    df = pd.read_parquet(DATA / "eval_records.parquet")
+    ev_path = DATA / "eval_records.parquet"
+    if not ev_path.exists():
+        raise SystemExit("[06] data/eval_records.parquet missing — run src/05_run.py first")
+    df = pd.read_parquet(ev_path)
     # sensitivity_h1 stays in: its rows appear in preliminary_results and the
     # SENSITIVITY test row — the pre-registered disclosure must surface
     df = df[df.sweep.isin(["primary", "structured", "sensitivity_h1"])]
+    if "failed" in df.columns:
+        n_failed = int(df["failed"].sum())
+        if n_failed:
+            print(f"[06] excluding {n_failed} failed records "
+                  f"(prereg exclusion rule 2, pairwise; disclosed)")
+        df = df[~df["failed"].astype(bool)]
     print(f"[06] {len(df)} records")
 
     res = results_table(df)

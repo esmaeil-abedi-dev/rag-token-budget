@@ -78,10 +78,10 @@ def truncate_to_tokens(text: str, max_tokens: int) -> str:
     ids = tok.encode(text, add_special_tokens=False)
     if len(ids) <= max_tokens:
         return text
-    out = tok.decode(ids[:max_tokens])
+    out = tok.decode(ids[:max_tokens]).replace("�", "")  # mid-multibyte cut
     while max_tokens > 0 and len(tok.encode(out, add_special_tokens=False)) > max_tokens:
         max_tokens -= 1
-        out = tok.decode(ids[:max_tokens])
+        out = tok.decode(ids[:max_tokens]).replace("�", "")
     return out
 
 
@@ -280,7 +280,9 @@ def llm_generate(
             return result
         except Exception as e:
             status = getattr(e, "status_code", None)
-            if status in (400, 401, 403, 404, 413, 422):
+            # 402 = OpenRouter out-of-credits: retrying thousands of calls for
+            # ~63s each would waste hours — stop immediately
+            if status in (400, 401, 402, 403, 404, 405, 410, 413, 422):
                 # non-retryable client errors: bad key/model/prompt — fail fast
                 raise RuntimeError(f"LLM call failed (non-retryable {status}): {e!r}") from e
             last_err = e
@@ -297,7 +299,7 @@ def embed_texts(texts: list[str], *, batch_size: int = 64) -> "list[list[float]]
     out: list = [None] * len(texts)
     missing_idx = []
     for i, t in enumerate(texts):
-        k = _cache_key({"embed": t, "model": EMBEDDING_MODEL})
+        k = _cache_key({"embed": t, "model": EMBEDDING_MODEL, "base_url": OPENROUTER_BASE_URL})
         hit = cache_get_vec(k)
         if hit is not None:
             out[i] = hit
@@ -322,6 +324,8 @@ def embed_texts(texts: list[str], *, batch_size: int = 64) -> "list[list[float]]
                     raise RuntimeError(
                         f"embeddings API returned {len(data)} vectors for {len(batch)} inputs"
                     )
+                # order is not contractual — the schema carries index for a reason
+                data = sorted(data, key=lambda d: d.get("index", 0))
                 break
             except Exception as e:
                 if attempt == 5:
@@ -331,7 +335,8 @@ def embed_texts(texts: list[str], *, batch_size: int = 64) -> "list[list[float]]
         puts = []
         for j, item in zip(batch, data):
             vec = item["embedding"]
-            puts.append((_cache_key({"embed": texts[j], "model": EMBEDDING_MODEL}), vec))
+            puts.append((_cache_key({"embed": texts[j], "model": EMBEDDING_MODEL,
+                                     "base_url": OPENROUTER_BASE_URL}), vec))
             out[j] = vec
         cache_put_vecs(puts)
     return out
@@ -345,7 +350,8 @@ def rerank(query: str, documents: list[str], *, top_n: int | None = None
     cached: bool) — callers use `cached` so per-search cost is charged once,
     not once per (arm, budget) reuse.
     """
-    k = _cache_key({"rerank": query, "docs": documents, "model": RERANK_MODEL, "top_n": top_n})
+    k = _cache_key({"rerank": query, "docs": documents, "model": RERANK_MODEL,
+                    "top_n": top_n, "base_url": OPENROUTER_BASE_URL})
     hit = cache_get_json("llm", f"rerank_{k}")
     if hit is not None:
         return [tuple(x) for x in hit], True

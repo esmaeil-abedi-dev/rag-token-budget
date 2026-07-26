@@ -47,6 +47,23 @@ GEN_MAX_TOKENS = 128
 PARTIAL_DIR = DATA / "eval_partial"
 PARTIAL_DIR.mkdir(exist_ok=True)
 
+_corpus_fp: str | None = None
+
+
+def corpus_fingerprint() -> str:
+    """Short hash of the chunk-ID list: assembled contexts cached against one
+    corpus must never be replayed against a rebuilt one (question IDs are
+    dataset-native and survive corpus rebuilds — the key alone can't tell)."""
+    global _corpus_fp
+    if _corpus_fp is None:
+        import hashlib
+
+        cdf = pd.read_parquet(DATA / "corpus_chunks.parquet", columns=["chunk_id"])
+        _corpus_fp = hashlib.sha256(
+            "\n".join(cdf["chunk_id"]).encode()
+        ).hexdigest()[:12]
+    return _corpus_fp
+
 def build_prompt(question: str, context: str | None) -> tuple[str, str]:
     if context is None:
         return GEN_SYSTEM_NO_CONTEXT, f"Question: {question}\nAnswer:"
@@ -66,6 +83,7 @@ def assemble_cached(q: dict, cands, budget: int, arm: str, extra: dict,
     kw_sig = "_".join(f"{k}={arm_kwargs[k]}" for k in sorted(arm_kwargs))
     key = f"{label}_{kw_sig}_{budget}_{q['question_id']}" if kw_sig else \
           f"{label}_{budget}_{q['question_id']}"
+    key = f"{corpus_fingerprint()}_{key}"
     hit = cache_get_json("assembled", key)
     if hit is not None:
         return hit
@@ -133,7 +151,9 @@ def run_block(questions: list[dict], *, sweep: str, arm: str, budget, ctx,
         if want_ids <= have_ids:
             # exact question-ID coverage, not row count: a stale/oversized
             # checkpoint (e.g. full run reused under --limit) is trimmed
-            return df[df["question_id"].isin(want_ids)].reset_index(drop=True)
+            out = df[df["question_id"].isin(want_ids)].reset_index(drop=True)
+            out["resumed_from_checkpoint"] = True  # spend accounting: costs $0 now
+            return out
     client = openrouter_client()
 
     assembled = []
@@ -147,14 +167,44 @@ def run_block(questions: list[dict], *, sweep: str, arm: str, budget, ctx,
         assembled.append((q, a, gold_in_pool))
 
     def work(item):
+        """Per-item failure containment (prereg exclusion rule 2): a question
+        that still fails after all retries becomes a failed=True record —
+        excluded pairwise downstream and disclosed — instead of killing the
+        whole block."""
         q, a, gip = item
-        return run_record(q, a["text"], sweep=sweep, arm=label, budget=budget,
-                          assembly=a, gold_in_pool=gip, client=client,
-                          with_judge=with_judge)
+        try:
+            rec = run_record(q, a["text"], sweep=sweep, arm=label, budget=budget,
+                             assembly=a, gold_in_pool=gip, client=client,
+                             with_judge=with_judge)
+            rec["failed"] = False
+            return rec
+        except Exception as e:
+            print(f"  RECORD FAILED {label} b={budget} {q['question_id']}: {e!r}")
+            return dict(
+                question_id=q["question_id"], dataset=q["dataset"],
+                hop_type=q["hop_type"], content_type=q["content_type"],
+                sweep=sweep, arm=label, budget=budget,
+                gen_context_tokens=0, gen_input_tokens=0, output_tokens=0,
+                assembly_input_tokens=0, assembly_output_tokens=0,
+                latency_assembly_s=0.0, latency_gen_s=0.0,
+                cost_gen_usd=0.0, cost_assembly_usd=0.0,
+                predicted_answer="", gold_answer=json.dumps(
+                    [str(g) for g in q["gold_answers"]]),
+                em=float("nan"), f1=float("nan"), gen_cached=False,
+                retrieval_gold_in_pool=gip, empty_context=False,
+                arm_meta=json.dumps({"error": repr(e)[:300]}),
+                wall_s=0.0, failed=True,
+                faithfulness=float("nan"), answer_relevance=float("nan"),
+                judge_cost_usd=0.0, judge_cached=False, judge_parse_ok=False,
+            )
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         records = list(ex.map(work, assembled))
 
     df = pd.DataFrame(records)
+    df["resumed_from_checkpoint"] = False
+    n_failed = int(df["failed"].sum())
+    if n_failed:
+        print(f"  {n_failed} FAILED records in {sweep}/{label}/b={budget} (disclosed)")
     df.to_parquet(ckpt, index=False)
     return df

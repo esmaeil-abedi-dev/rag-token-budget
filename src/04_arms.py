@@ -58,10 +58,18 @@ def extract_entities_spacy(texts: list[str]) -> list[set[str]]:
     try:
         nlp = spacy.load("en_core_web_sm", disable=["parser", "lemmatizer", "tagger"])
     except OSError:
-        from spacy.cli import download
+        try:
+            # spacy.cli.download shells out to pip and raises SystemExit (a
+            # BaseException) in pip-less venvs — catch broadly so the recorded
+            # regex fallback can take over instead of killing the pipeline.
+            # (requirements.txt installs the model wheel directly; this path is
+            # a belt-and-braces recovery only.)
+            from spacy.cli import download
 
-        download("en_core_web_sm")
-        nlp = spacy.load("en_core_web_sm", disable=["parser", "lemmatizer", "tagger"])
+            download("en_core_web_sm")
+            nlp = spacy.load("en_core_web_sm", disable=["parser", "lemmatizer", "tagger"])
+        except BaseException as e:  # noqa: BLE001
+            raise RuntimeError(f"spaCy model unavailable: {e!r}") from e
 
     keep = {"PERSON", "ORG", "GPE", "LOC", "FAC", "NORP", "EVENT", "WORK_OF_ART", "PRODUCT"}
     out = []
@@ -213,7 +221,8 @@ def main():
     args, _ = ap.parse_known_args()
     build_graph(args.force)
     if not (COMPLIANCE.exists() and not args.force) and not args.yes:
-        est = N_COMPLIANCE_Q * (0.002 + 0.0015)  # rerank searches + RECOMP summaries
+        # 25 rerank searches + 25 q x 4 budgets RECOMP summaries
+        est = N_COMPLIANCE_Q * 0.002 + N_COMPLIANCE_Q * len(BUDGETS) * 0.0015
         resp = input(f"[04] compliance run makes paid calls (~${est:.2f}). Proceed? [y/N] ")
         if resp.strip().lower() not in ("y", "yes"):
             print("aborted before spending")

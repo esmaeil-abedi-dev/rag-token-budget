@@ -74,13 +74,16 @@ def summarize_recomp(question, candidates, budget, **ctx):
     # the WHOLE candidate pool in its extractive pass, then feeds the extract to
     # its summarizer LLM — both are assembly input. Charging only the LLM call
     # would hand RECOMP a ~4x bookkeeping advantage over rerank/LLMLingua.
-    pool_tokens = sum(c.n_tokens for c in candidates) + n_tokens(question)
+    # NOTE (disclosed in RESULTS_SUMMARY): the extractive pass here is lexical,
+    # so the pool charge is the as-published-RECOMP imputation. The question is
+    # already inside res.input_tokens — not double-charged.
+    pool_tokens = sum(c.n_tokens for c in candidates)
     return finalize(
         "summarize_recomp", text, [c.chunk_id for c in candidates], budget,
         assembly_input_tokens=pool_tokens + res.input_tokens,
         assembly_output_tokens=res.output_tokens,
         assembly_latency_s=round(latency, 3),
-        assembly_cost_usd=res.cost_usd,
+        assembly_cost_usd=0.0 if res.cached else res.cost_usd,
         meta={"summary_truncated": truncated, "extract_tokens": n_tokens(extract),
               "summary_cached": res.cached},
     )

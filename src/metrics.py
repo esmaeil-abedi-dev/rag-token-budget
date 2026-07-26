@@ -96,8 +96,11 @@ def judge_scores(question: str, context: str, answer: str, *, client=None) -> di
     if m:
         try:
             d = json.loads(m.group(0))
-            out["faithfulness"] = max(0.0, min(1.0, float(d.get("faithfulness"))))
-            out["answer_relevance"] = max(0.0, min(1.0, float(d.get("answer_relevance"))))
+            # parse BOTH into temporaries first: a row must never end up with
+            # one real score, one NaN, and judge_parse_ok=False
+            faith = max(0.0, min(1.0, float(d["faithfulness"])))
+            rel = max(0.0, min(1.0, float(d["answer_relevance"])))
+            out["faithfulness"], out["answer_relevance"] = faith, rel
             out["judge_parse_ok"] = True
         except (ValueError, TypeError, KeyError):
             pass

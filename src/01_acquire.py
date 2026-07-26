@@ -512,11 +512,11 @@ def main():
     # a previous run that recorded failures (or an empty mandatory output) is
     # NOT complete — outputs existing is necessary but not sufficient to skip
     prev_failures = {}
-    if MANIFEST := (DATA / "manifest.json"):
-        if MANIFEST.exists():
-            import json as _json
+    manifest_path = DATA / "manifest.json"
+    if manifest_path.exists():
+        import json as _json
 
-            prev_failures = _json.loads(MANIFEST.read_text()).get("stage01", {}).get("failures", {})
+        prev_failures = _json.loads(manifest_path.read_text()).get("stage01", {}).get("failures", {})
     complete = not prev_failures and all(p.exists() for p in outputs)
     if complete and len(pd.read_parquet(Q_STRUCTURED)) == 0:
         complete = False

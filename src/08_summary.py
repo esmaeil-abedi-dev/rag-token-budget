@@ -243,6 +243,12 @@ def main():
       "exploratory; MultiHop-RAG evaluation questions come from its only published split "
       "(train); pgvector persists vectors while query-time retrieval uses exact cosine "
       "over the same vectors (removes ANN variance).")
+    p("- Token-accounting convention for APT_total: RECOMP's extractive pass and the "
+      "LLMLingua fallback (when active) are lexical, not model reads — their candidate-"
+      "pool charge is the as-published-method imputation, applied so RECOMP/LLMLingua "
+      "are accounted like the published pipelines they stand in for. The two-proportion "
+      "z rows pair a pre-registered UNPAIRED p with a PAIRED bootstrap CI (both mandated); "
+      "where they disagree, McNemar carries the paired inference.")
 
     SUMMARY.write_text("".join(S))
     print(f"[08] wrote {SUMMARY} ({len(S)} blocks)")

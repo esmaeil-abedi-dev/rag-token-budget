@@ -29,7 +29,14 @@ RANDOM_BUDGET = 1000
 SEP = "\n\n"
 
 
-def build_context(cond: str, q: dict, ctx, rng) -> str | None:
+def hash_stable(s: str) -> int:
+    """Process-independent string hash (builtin hash() is randomized)."""
+    import hashlib
+
+    return int(hashlib.sha256(s.encode()).hexdigest()[:8], 16)
+
+
+def build_context(cond: str, q: dict, ctx, rng=None) -> str | None:
     if cond == "no_context":
         return None
     if cond == "gold_context":
@@ -37,6 +44,11 @@ def build_context(cond: str, q: dict, ctx, rng) -> str | None:
     if cond == "full_context":
         return SEP.join(c.text for c in ctx.candidates(q["question_id"]))
     if cond == "random_chunks":
+        # per-question stream: the random context is a pure function of
+        # (SEED, question_id) — identical under --limit, reordering, or resume,
+        # so LLM-cache reuse works across runs
+        rng = np.random.default_rng(
+            [SEED, abs(hash_stable(q["question_id"])) % 2**31])
         ids = rng.permutation(len(ctx.chunk_ids))
         parts, total = [], 0
         for j in ids:
@@ -57,16 +69,27 @@ def main():
     ap.add_argument("--yes", action="store_true", help="skip the spend confirmation")
     args, _ = ap.parse_known_args()
 
-    if BASELINES.exists() and not args.force:
-        print("[04b] exists, skipping")
-        return
-
     from retrieval_ctx import RetrievalContext
 
     ctx = RetrievalContext()
     qp = pd.read_parquet(DATA / "questions_primary_clean.parquet").to_dict("records")
     if args.limit:
         qp = qp[: args.limit]
+
+    # skip only if the existing file COVERS the requested questions for every
+    # condition — a --limit smoke run must never freeze the full deliverable
+    if BASELINES.exists() and not args.force:
+        prev = pd.read_parquet(BASELINES)
+        want = {q["question_id"] for q in qp}
+        covered = all(
+            want <= set(prev[prev.arm == cond]["question_id"])
+            for cond in ["no_context", "gold_context", "random_chunks", "full_context"]
+        )
+        if covered:
+            print("[04b] existing records cover all requested questions, skipping")
+            return
+        print(f"[04b] existing file covers fewer questions than requested "
+              f"({prev.question_id.nunique()} < {len(want)}) — re-running")
 
     # projected spend gate (mirrors 05): full_context reads ~12.8k tokens/question
     n_calls = 4 * len(qp)
@@ -80,12 +103,11 @@ def main():
             return
 
     client = openrouter_client()
-    rng = np.random.default_rng(SEED)
 
     frames = []
     for cond in ["no_context", "gold_context", "random_chunks", "full_context"]:
         t0 = time.time()
-        items = [(q, build_context(cond, q, ctx, rng)) for q in qp]
+        items = [(q, build_context(cond, q, ctx)) for q in qp]
 
         def gold_pool_flag(q, _cond):
             # honest per-condition semantics: only conditions that draw from the

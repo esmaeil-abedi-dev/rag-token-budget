@@ -72,6 +72,12 @@ class RetrievalContext:
 
     def arm_ctx(self, question_id: str) -> dict:
         """Extra kwargs the graph arm needs."""
+        if not self.graph:
+            raise RuntimeError(
+                "graph_edges.parquet missing/empty — run src/04_arms.py first; "
+                "running graph_select without the graph would silently degrade "
+                "the novel arm to flat similarity and invalidate RQ3"
+            )
         return dict(
             graph=self.graph,
             chunk_lookup=self._chunks,

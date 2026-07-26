@@ -24,15 +24,17 @@ huggingface_hub>=0.23
 llmlingua>=0.2.2
 torch>=2.0
 
-# Graph arm NER (spaCy model en_core_web_sm auto-downloads on first run of
-# src/04_arms.py — a one-time ~12MB network fetch; regex fallback in
-# src/04_arms.py if spaCy is unavailable)
+# Graph arm NER (model installed as a direct wheel: uv venvs have no pip, so
+# spaCy's runtime auto-download cannot work; regex fallback in src/04_arms.py
+# only if spaCy itself is unavailable)
 spacy>=3.7
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 
 # Analysis
 matplotlib>=3.8
 scipy>=1.13
 statsmodels>=0.14
 requests>=2.31
+tabulate>=0.9          # pandas.to_markdown in 08_summary
 
 # Exact versions used for the recorded runs: requirements.lock.txt

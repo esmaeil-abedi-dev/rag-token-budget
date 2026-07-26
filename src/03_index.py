@@ -142,8 +142,11 @@ def evaluate_retrieval(questions: pd.DataFrame, cdf: pd.DataFrame, emb: np.ndarr
     its chunks appears among the top-k DISTINCT passages."""
     pid_of = cdf["passage_id"].to_numpy()
     rows = []
-    # retrieve deep enough that k distinct passages survive chunk-dedup
-    top_dense = dense_topk(qvecs, emb, max(KS) * 4)
+    # retrieve deep enough that k DISTINCT passages survive chunk-dedup even in
+    # corpora where one long article contributes dozens of top chunks
+    # (MultiHop-RAG p95 = 56 chunks/passage)
+    depth = max(KS) * 20
+    top_dense = dense_topk(qvecs, emb, min(depth, emb.shape[0]))
 
     for qi, (_, q) in enumerate(questions.iterrows()):
         gold = set(q["gold_passage_ids"])
@@ -151,7 +154,7 @@ def evaluate_retrieval(questions: pd.DataFrame, cdf: pd.DataFrame, emb: np.ndarr
             continue
         ranked_pids = _unique_pids(top_dense[qi], pid_of, max(KS))
         scores = bm25.get_scores(str(q["question"]).lower().split())
-        bm_idx = np.argsort(-scores)[: max(KS) * 4]
+        bm_idx = np.argsort(-scores)[:depth]
         bm_pids = _unique_pids(bm_idx, pid_of, max(KS))
 
         for method, plist in (("dense_bge_m3", ranked_pids), ("bm25", bm_pids)):
@@ -207,14 +210,34 @@ def make_figure(rq: pd.DataFrame):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--yes", action="store_true", help="skip the spend confirmation")
     args, _ = ap.parse_known_args()
 
-    if skip_if_exists([EMB_NPY, CHUNK_IDS, BM25_PKL, RQ_CSV, FIG_RECALL], args.force, "03_index"):
+    outputs_03 = [EMB_NPY, CHUNK_IDS, BM25_PKL, RQ_CSV, FIG_RECALL,
+                  DATA / "question_embeddings.npy", DATA / "question_ids.json"]
+    if skip_if_exists(outputs_03, args.force, "03_index"):
+        # a completed-but-FAILED gate must keep failing on re-run, not slip
+        # past skip-if-exists into a paid sweep capped by broken retrieval
+        manifest = json.loads((DATA / "manifest.json").read_text()) if (DATA / "manifest.json").exists() else {}
+        if manifest.get("stage03", {}).get("gate_passed") is False:
+            print("[03] previous run FAILED the retrieval gate — refusing to pass silently")
+            sys.exit(2)
         return
 
     cdf = pd.read_parquet(CORPUS)
     qp = pd.read_parquet(QP_CLEAN)
     qs = pd.read_parquet(QS_CLEAN)
+
+    # spend gate (every paid stage projects and confirms)
+    total_tokens = int(cdf["n_tokens"].sum()) + 40 * (len(qp) + len(qs))
+    est = total_tokens * 0.01 / 1e6  # bge-m3 $0.01/M; cache hits make this an upper bound
+    print(f"[03] embedding projection: ~{total_tokens/1e6:.1f}M tokens ≈ ${est:.2f} "
+          f"(upper bound; already-cached vectors are free)")
+    if not args.yes:
+        resp = input("Proceed with embedding spend? [y/N] ")
+        if resp.strip().lower() not in ("y", "yes"):
+            print("aborted before spending")
+            return
     from common import EMBEDDING_MODEL
 
     print(f"[03] embedding {len(cdf)} chunks via OpenRouter ({EMBEDDING_MODEL}) ...")

@@ -57,18 +57,25 @@ def main():
         elif t["test"] == "mcnemar_exact" and pd.notna(t.get("n_discordant_b")):
             n_obs = n_mcnemar(int(t["n_discordant_b"]), int(t["n_discordant_c"]), int(t["n"]))
             formula = "discordant-pair formula"
-        elif t["test"] in ("welch_t", "paired_t") and pd.notna(t["effect"]) and t["effect"] != 0:
-            # RQ2's observed-effect n (the brief requires assumed vs observed
-            # for EVERY RQ): n per group = (z_{1-a/2}+z_b)^2 / d^2
-            n_obs = (Z_A + Z_B) ** 2 / float(t["effect"]) ** 2
-            formula = "n = (z_a/2+z_b)^2/d^2 (per group, t-test approximation)"
+        elif t["test"] == "welch_t" and pd.notna(t["effect"]) and t["effect"] != 0:
+            # RQ2 primary: TWO independent groups (multi vs single questions),
+            # effect = pooled-SD Cohen's d -> the factor of 2 applies here too
+            n_obs = 2 * (Z_A + Z_B) ** 2 / float(t["effect"]) ** 2
+            formula = "n per group = 2(z_a/2+z_b)^2/d^2 (two-sample t approximation)"
+        elif t["test"] == "paired_t" and pd.notna(t.get("effect_dz")) and t["effect_dz"] != 0:
+            # paired design: use the STANDARDIZED paired effect d_z =
+            # mean_diff/sd(diff) emitted by 06 — the raw mean_diff is NOT a
+            # standardized effect and would misscale n by 1/sd^2
+            n_obs = (Z_A + Z_B) ** 2 / float(t["effect_dz"]) ** 2
+            formula = "n = (z_a/2+z_b)^2/d_z^2 (paired t, d_z = mean_diff/sd_diff)"
         else:
             continue
         rows.append(dict(
             rq=t["rq"], comparison=t["comparison"], budget=t["budget"], test=t["test"],
-            observed_effect=round(float(t["effect"]), 4),
+            observed_effect=round(float(t["effect"]), 4) if np.isfinite(float(t["effect"])) else None,
             n_assumed_synopsis=SYNOPSIS_ASSUMED.get(t["rq"]),
-            n_observed_effect=int(np.ceil(n_obs)) if np.isfinite(n_obs) else -1,
+            # blank (not -1) when the observed effect implies no finite n
+            n_observed_effect=int(np.ceil(n_obs)) if np.isfinite(n_obs) else None,
             formula=formula, alpha=ALPHA, power=POWER,
             primary_comparison=bool(t["primary_comparison"]),
         ))

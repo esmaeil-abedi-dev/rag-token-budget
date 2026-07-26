@@ -113,7 +113,8 @@ def main():
     ap.add_argument("--force", action="store_true")
     args, _ = ap.parse_known_args()
 
-    if skip_if_exists([CORPUS, QP_CLEAN, QS_CLEAN, CLEAN_LOG], args.force, "02_clean"):
+    if skip_if_exists([CORPUS, QP_CLEAN, QS_CLEAN, CLEAN_LOG,
+                       DATA / "passages_clean.parquet"], args.force, "02_clean"):
         return
 
     qp = pd.read_parquet(Q_PRIMARY)
@@ -177,7 +178,9 @@ def main():
     n0 = len(pf)
     pf["_key"] = pf["text"].apply(norm_key)
     pf = (
-        pf.sort_values("is_gold", ascending=False)
+        # stable sort: which duplicate copy survives must not depend on the
+        # sort implementation's tie order across pandas versions
+        pf.sort_values("is_gold", ascending=False, kind="stable")
         .drop_duplicates("_key", keep="first")
         .sort_index()
         .reset_index(drop=True)
@@ -265,10 +268,11 @@ def main():
         f"Chunking ({CHUNK_TOKENS}-token target, {CHUNK_OVERLAP} overlap)",
         "text -> chunks",
         f"generator tokenizer; sub-{MIN_CHUNK_TOKENS}-token tails dropped "
-        f"(gold passages exempt); {n_fffd} boundary-split chars repaired; "
+        f"(gold passages exempt); {n_fffd} chunks with boundary-split chars repaired; "
         f"n_tokens re-encoded for exactness",
         f"{n_pass} passages -> {len(cdf)} chunks",
-        "Fixed-size chunks make budget arithmetic exact across arms",
+        "Fixed-size chunks make budget arithmetic exact across arms "
+        "(negative Pct Removed = unit change, passages become chunks)",
         n_pass, len(cdf),
     )
 
