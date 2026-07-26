@@ -99,7 +99,20 @@ def main():
     ap.add_argument("--tier1-only", action="store_true",
                     help="run only Tier 1 datasets (hotpotqa, multihop_rag, squad_v2) "
                          "as a complete first pass")
+    ap.add_argument("--arms", type=str, default=None,
+                    help="comma-separated subset of arms to run this invocation "
+                         "(e.g. defer compress_llmlingua to a GPU session); "
+                         "omitted arms keep their existing checkpoints")
     args, _ = ap.parse_known_args()
+
+    run_arms = SWEEP_ARMS
+    if args.arms:
+        requested = [a.strip() for a in args.arms.split(",") if a.strip()]
+        bad = set(requested) - set(SWEEP_ARMS)
+        if bad:
+            raise SystemExit(f"unknown arms: {sorted(bad)}; valid: {SWEEP_ARMS}")
+        run_arms = [a for a in SWEEP_ARMS if a in requested]
+        print(f"[05] arm subset this invocation: {run_arms}")
 
     sweeps = ["primary", "structured"] if args.sweep == "both" else [args.sweep]
     q_primary = load_questions("primary")
@@ -156,7 +169,7 @@ def main():
     for sweep, questions in (("primary", q_primary), ("structured", q_structured)):
         if sweep not in sweeps or not questions:
             continue
-        for arm in SWEEP_ARMS:
+        for arm in run_arms:
             for budget in BUDGETS:
                 t0 = time.time()
                 df = run_block(questions, sweep=sweep, arm=arm, budget=budget,
@@ -170,7 +183,8 @@ def main():
     # graph sensitivity: hops=1 at the 1000 budget (the brief's hyperparameter
     # run). Distinct arm_label + arm_kwargs give it its own assembly-cache keys
     # — it can NEVER silently reuse the hops=2 contexts.
-    if not args.skip_sensitivity and "primary" in sweeps and q_primary:
+    if (not args.skip_sensitivity and "primary" in sweeps and q_primary
+        and "graph_select" in run_arms):
         df = run_block(q_primary, sweep="sensitivity_h1", arm="graph_select",
                        budget=1000, ctx=ctx, workers=args.workers, force=args.force,
                        arm_label="graph_select_h1", arm_kwargs={"hops": 1})
