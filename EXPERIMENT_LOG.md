@@ -323,3 +323,51 @@ corpus: 25957 passages -> 72967 chunks (mean 109.4 tokens; 12310 structured)
 gold coverage: primary questions with >=1 matched gold passage: 600/600
 ```
 Full step log in outputs/data_cleaning_log.csv.
+
+---
+
+## 2026-07-26 14:40 — Review round 2: second 5-agent audit, full fix pass (NO API)
+
+Five fresh reviewers re-audited everything from scratch. Verdict on round-1
+fixes: ALL verified correct — in code and against the regenerated artifacts
+(the pipeline reviewer proved the min-length gold exemption complete and
+re-validated every invariant; the arms reviewer traced the sensitivity fix
+end-to-end under adversarial hash seeds; the stats reviewer numerically
+verified McNemar/BH/slopes/power).
+
+New findings fixed this round (none result-corrupting; several would have
+crashed or silently truncated the pipeline):
+- 08_summary would crash on `to_markdown` (tabulate absent) — dep added.
+- spaCy model cannot auto-download into a pip-less uv venv — installed as a
+  direct wheel + BaseException guard around the legacy download path.
+- Stage 03: now projects cost and confirms like every other paid stage, and a
+  FAILED retrieval gate is remembered on re-run (skip path re-fails).
+- 04b/04c: coverage-aware skip — a --limit smoke run can no longer freeze
+  n=20 artifacts as final deliverables. 04c also refuses to run on nothing.
+- 05: eval_records rebuild now quarantines under-covered (smoke residue)
+  checkpoints with a warning; spot-check keeps hand-entered verdicts and
+  includes the FULL judged context; projection includes the sensitivity block.
+- runner: per-question failure containment (failed=True records, excluded
+  pairwise + disclosed — implements prereg exclusion rule 2); assembled-cache
+  keys carry a corpus fingerprint (rebuilt corpus can never replay stale
+  contexts); resumed blocks count $0 toward this-run spend.
+- 07 power: welch branch now has the factor of 2; paired rows use d_z =
+  mean_diff/sd_diff (raw mean_diff had misscaled n by 1/sd^2) — found by the
+  stats reviewer in the exact file whose docstring warns about factor-of-2
+  errors.
+- common: 402/405/410 fail fast; embeddings response sorted by index field;
+  base_url added to embed/rerank cache keys; truncate strips boundary chars.
+- arms: RECOMP no longer double-charges the question and zeroes cached
+  summary cost; compress drops the question charge (question-agnostic) and
+  labels fallback per call; empty-graph guard stops graph_select degrading
+  silently; 04b random_chunks contexts are pure functions of (seed, question).
+- 06: bootstrap CIs on every hop slice + error bars on the hop figure;
+  failed-record exclusion with disclosure; RQ2 completeness check (drops
+  questions with incomplete arm coverage, disclosed); unpaired-p/paired-CI
+  note on two-proportion rows; SENSITIVITY merge budget/arm-filtered.
+- Repo: LICENSE (MIT) added; stable dedup sort (cross-version determinism);
+  02 re-run — corpus byte-identical counts (25,957 passages / 72,967 chunks,
+  600/600 coverage). Note: the earlier "0 U+FFFD" phrasing meant 0 REMAINING
+  after 37 boundary-split chunks were repaired during chunking.
+
+Round 3 (full re-review) launching next.
