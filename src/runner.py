@@ -156,6 +156,8 @@ def run_block(questions: list[dict], *, sweep: str, arm: str, budget, ctx,
     want_ids = {q["question_id"] for q in questions}
     if ckpt.exists() and not force:
         df = pd.read_parquet(ckpt)
+        if "failed" in df.columns:  # failed rows don't count as coverage: retry them
+            df = df[~df["failed"].astype(bool)]
         have_ids = set(df["question_id"])
         if want_ids <= have_ids:
             # exact question-ID coverage, not row count: a stale/oversized

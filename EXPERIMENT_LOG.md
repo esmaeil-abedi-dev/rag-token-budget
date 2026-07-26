@@ -465,3 +465,26 @@ as coverage (transient failures retry without --force); 07 guards zero
 computable tests; position_ablation.csv header flattened.
 
 ROUND 5 verifies this small surface; loop continues until a fully clean round.
+
+---
+
+## 2026-07-26 14:31 — Review round 5: VERDICT CLEAN — loop closed (NO API)
+
+Final-gate auditor verified all six round-4 fixes by offline simulation
+(04c skip decision table 6/6 correct; per-question bootstrap CI demonstrably
+wider than the anti-conservative row bootstrap, 0.173 vs 0.098 on correlated
+synthetic data; checkpoint fingerprint parse unbroken for every sweep/label
+combination; failure-row schema parity; empty-frame guards; flat CSV header)
+and swept the whole repo once more: NOTHING MAJOR OR CRITICAL REMAINS.
+
+Residuals accepted as-is or fixed: 05 block resume now also retries failed
+rows (same treatment 04b got); the two remaining notes are unreachable-in-
+practice degenerate paths, documented here.
+
+Loop totals: 5 rounds, 13 reviewer reports, ~85 findings triaged — every
+CRITICAL/MAJOR fixed and re-verified by later rounds; total generator spend
+during the entire loop: $0 (the only paid activity remains the ~$0.03 of
+partial embeddings from before the freeze). The pipeline is ready for the
+user's run decision: 03 (embeddings ~$0.08) -> 04 (graph + compliance
+~$0.25) -> 05 smoke (--limit 20, ~$1) -> full sweeps + 04b/04c
+(~$23-26 ceiling) -> 06/07/08 (free).
