@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pickle
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -249,8 +250,19 @@ def main():
     np.save(EMB_NPY, emb)
     CHUNK_IDS.write_text(json.dumps(cdf["chunk_id"].tolist()))
 
-    print("[03] loading pgvector ...")
-    load_into_pgvector(cdf, emb)
+    # SKIP_PGVECTOR=1 (e.g. Google Colab: no Postgres server): recorded
+    # deviation, science unchanged — query-time retrieval is exact in-memory
+    # cosine either way; pgvector is the persistent store when available.
+    skip_pg = os.getenv("SKIP_PGVECTOR", "").strip() == "1"
+    if skip_pg:
+        print("[03] SKIP_PGVECTOR=1 — pgvector load skipped (recorded deviation)")
+        update_manifest(deviation="pgvector unavailable in this environment "
+                                  "(SKIP_PGVECTOR=1, e.g. Colab); vectors persisted "
+                                  "as embeddings.npy only; retrieval unchanged "
+                                  "(exact in-memory cosine)")
+    else:
+        print("[03] loading pgvector ...")
+        load_into_pgvector(cdf, emb)
 
     print("[03] building BM25 ...")
     from rank_bm25 import BM25Okapi
@@ -279,8 +291,9 @@ def main():
         stage03=dict(
             n_chunks=len(cdf),
             embedding_dim=int(emb.shape[1]),
-            vector_store=("pgvector (podman) persists all vectors + HNSW index; "
-                          "query-time retrieval uses exact in-memory cosine over the "
+            vector_store=(("embeddings.npy only (SKIP_PGVECTOR=1)" if skip_pg else
+                           "pgvector (podman) persists all vectors + HNSW index") +
+                          "; query-time retrieval uses exact in-memory cosine over the "
                           "same vectors to eliminate ANN recall variance"),
             hotpot_dense_recall_at_50=gate_val,
             gate_passed=bool(gate_ok),

@@ -544,3 +544,31 @@ What the validation MEANS for the study (recorded for the report's EDA section):
    the two in 06's stratification; the report must state this confound.
 
 Stage 04 (graph build + budget compliance) launched next.
+
+---
+
+## 2026-07-26 17:00 — Compute moved to Google Colab (Mac froze on stage 04)
+
+The Mac (16 GiB) froze during stage 04's spaCy NER pass over 72,967 chunks;
+the run was killed with no data loss (stage 04 had written nothing yet; all
+paid work lives in llm_cache/cache.db, which is intact).
+
+Changes for the Colab environment (both recorded, neither affects results):
+- SKIP_PGVECTOR=1 supported in 03: no Postgres server on Colab, vectors
+  persist as embeddings.npy only — a recorded DEVIATION; query-time retrieval
+  was ALWAYS exact in-memory cosine, so the science is unchanged. The local
+  pgvector store (already loaded from the Mac run) remains the repo's
+  persistent store.
+- LLMLingua compressor now uses CUDA when available (Colab T4), else MPS/CPU.
+
+New: notebooks/colab_run.ipynb — mounts Drive, restores prior progress
+(cache.db, checkpoints, outputs), installs deps, runs 01→08 with a sync to
+MyDrive/ragtb/sync/ after every stage plus a 10-minute background sync during
+the long sweep, pauses for smoke-test inspection before the full spend, and
+renders all figures + RESULTS_SUMMARY.md inline. colab_bundle.zip (307 MB:
+code + data parquets + manifest + outputs + the 26 MB embedding cache) is the
+transfer vehicle — gitignored, regenerable. Stage 03 re-derives its index on
+Colab from the embedding cache at ~$0 (all 74,156 vectors cached).
+
+State at handoff: stages 01-03 complete and validated (gate passed 0.947);
+stage 04 onward runs on Colab. Cumulative spend ≈ $0.11.

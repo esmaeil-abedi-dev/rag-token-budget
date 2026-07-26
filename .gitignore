@@ -28,3 +28,6 @@ venv/
 
 # --- os ---
 .DS_Store
+
+# --- colab transfer bundle (large, regenerable) ---
+colab_bundle.zip
