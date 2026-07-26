@@ -488,3 +488,59 @@ partial embeddings from before the freeze). The pipeline is ready for the
 user's run decision: 03 (embeddings ~$0.08) -> 04 (graph + compliance
 ~$0.25) -> 05 smoke (--limit 20, ~$1) -> full sweeps + 04b/04c
 (~$23-26 ceiling) -> 06/07/08 (free).
+
+---
+
+## 2026-07-26 14:44 — Stage 03 index — retrieval validated
+
+```
+           dataset       method  recall@1  recall@5  recall@10  recall@20  recall@50    mrr
+          hotpotqa         bm25    0.2933    0.5567     0.6467     0.7267     0.7967 0.6954
+          hotpotqa dense_bge_m3    0.4433    0.8000     0.9033     0.9333     0.9467 0.9291
+           liverag         bm25    0.7200    0.8400     0.8933     0.9067     0.9067 0.7803
+           liverag dense_bge_m3    0.9467    1.0000     1.0000     1.0000     1.0000 0.9711
+          ms_marco         bm25    0.1667    0.5467     0.7200     0.7933     0.8267 0.3392
+          ms_marco dense_bge_m3    0.4000    0.8200     0.9200     0.9733     0.9867 0.5924
+      multihop_rag         bm25    0.2139    0.5394     0.6378     0.7200     0.8122 0.6319
+      multihop_rag dense_bge_m3    0.2844    0.6656     0.8417     0.9533     0.9900 0.7717
+      nq_open_gold         bm25    0.3733    0.5600     0.6800     0.7067     0.7333 0.4662
+      nq_open_gold dense_bge_m3    0.7067    0.8667     0.8800     0.9067     0.9467 0.7805
+          squad_v2         bm25    0.4667    0.7067     0.7600     0.8000     0.8667 0.5768
+          squad_v2 dense_bge_m3    0.8400    0.9067     0.9600     0.9600     1.0000 0.8739
+wikitablequestions         bm25    0.1133    0.1517     0.1800     0.2017     0.2500 0.1349
+wikitablequestions dense_bge_m3    0.2650    0.4217     0.5017     0.6100     0.7333 0.3456
+            POOLED         bm25    0.2280    0.3787     0.4414     0.4821     0.5344 0.3685
+            POOLED dense_bge_m3    0.4043    0.6186     0.7040     0.7808     0.8546 0.5865
+```
+HotpotQA dense recall@50 = 0.947 (gate 0.7) — PASS
+
+---
+
+## 2026-07-26 14:51 — Stage 03 interpretation (first paid stage after the go decision)
+
+Spend: ~$0.08 for 74,156 embeddings (68,461 new + 5,695 cache hits), exactly
+as projected. Cumulative project spend ≈ $0.11.
+
+What the validation MEANS for the study (recorded for the report's EDA section):
+
+1. **Gate passed decisively** (HotpotQA dense recall@50 = 0.947 vs 0.7): the
+   arm comparison is not capped by retrieval quality — downstream differences
+   are attributable to assembly strategy. This was a precondition, not a
+   finding about the RQs.
+2. **Dense (BGE-M3) > BM25 on every dataset** (pooled recall@50 0.855 vs
+   0.534; MRR 0.587 vs 0.369). The fixed-retriever choice is now an
+   evidence-backed decision, not an assumption.
+3. **HotpotQA MRR = 0.929**: the FIRST gold passage ranks near the top almost
+   always; the multi-hop challenge is fitting the SECOND bridging passage
+   into the budget — precisely the mechanism the graph arm hypothesizes it
+   exploits. Good news for the sensitivity of RQ3.
+4. **Known ceilings, disclosed up front**: HotpotQA full-evidence ceiling is
+   ~95% (recall@50 = 0.947) — shared equally by all arms, comparisons stay
+   fair. WikiTableQuestions is the retrieval outlier (dense 0.733, BM25
+   collapses to 0.250): serialized tables embed/match poorly, so ~27% of
+   structured questions start with the gold table outside the top-50 pool.
+   **RQ4's structured-content penalty is therefore part retrieval, part
+   assembly** — the per-record retrieval_gold_in_pool flag exists to separate
+   the two in 06's stratification; the report must state this confound.
+
+Stage 04 (graph build + budget compliance) launched next.
