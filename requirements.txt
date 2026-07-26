@@ -1,0 +1,32 @@
+# Core data
+datasets>=2.19
+pandas>=2.2
+pyarrow>=16
+numpy>=1.26
+
+# Retrieval / storage
+rank_bm25>=0.2.2
+datasketch>=1.6
+psycopg[binary]>=3.1
+pgvector>=0.3
+
+# OpenRouter (generator, judge, embeddings, rerank — one key)
+openai>=1.35
+python-dotenv>=1.0
+
+# Exact budget tokenization: the generator's own tokenizer (Qwen3)
+transformers>=4.51
+huggingface_hub>=0.23
+
+# Compression arm (LLMLingua-2); documented fallback in arms/ if install fails
+llmlingua>=0.2.2
+
+# Graph arm NER (fallback: regex noun-phrase extractor in arms/graph_select.py)
+spacy>=3.7
+
+# Analysis
+matplotlib>=3.8
+scipy>=1.13
+statsmodels>=0.14
+tqdm>=4.66
+requests>=2.31
