@@ -86,15 +86,20 @@ def main():
             f"undefined for rewritten text, so the best SELECTION arm is ablated; disclosed)")
     print(f"[04c] ablating {best_arm} at {ABLATION_BUDGET}{note}")
 
-    # skip only when the previous run covered at least as many input questions
-    # AND ablated the same arm — a re-swept design can change the best arm
+    # skip only when the previous run (a) attempted at least as many input
+    # questions, (b) ablated the same arm, AND (c) skipped nothing for missing
+    # assemblies — skipped_no_assembly > 0 means the sweep was partial when it
+    # ran (e.g. tier1-only), and the ablation must be redone once assemblies
+    # exist. n_input_questions alone counts ATTEMPTED, not ablated.
     if OUT_CSV.exists() and not args.force:
         if (prev_04c.get("n_input_questions", 0) >= n_want
-                and prev_04c.get("best_arm") == best_arm):
-            print(f"[04c] previous run covered {prev_04c['n_input_questions']} questions "
-                  f"with the same best arm ({best_arm}), skipping")
+                and prev_04c.get("best_arm") == best_arm
+                and prev_04c.get("skipped_no_assembly", 1) == 0):
+            print(f"[04c] previous run fully covered {prev_04c['n_input_questions']} "
+                  f"questions with the same best arm ({best_arm}), skipping")
             return
-        print("[04c] previous run under-covers or ablated a different arm — re-running")
+        print("[04c] previous run under-covers, skipped assemblies, or ablated a "
+              "different arm — re-running")
 
     qp = pd.read_parquet(DATA / "questions_primary_clean.parquet").to_dict("records")
     if args.limit:
@@ -166,7 +171,9 @@ def main():
         print(f"[04c] {n_rec_failed} failed records excluded (disclosed)")
         df = df[~df["failed"].astype(bool)]
     agg = df.groupby("position")[["em", "f1", "faithfulness"]].agg(["mean", "count"]).round(4)
-    agg.to_csv(OUT_CSV)
+    agg.columns = [f"{m}_{s}" for m, s in agg.columns]  # flat header for 08/report
+    agg = agg.reset_index()
+    agg.to_csv(OUT_CSV, index=False)
     print(agg.to_string(), f"\n({time.time()-t0:.0f}s)")
 
     import matplotlib
@@ -189,6 +196,7 @@ def main():
         best_arm=best_arm, overall_best_arm=overall_best,
         disclosure=note.strip() or "best selection arm was also the overall best",
         n_input_questions=len(qp), n_questions=len(df) // 3,
+        n_failed_records=n_rec_failed,
         skipped_no_assembly=skipped_no_assembly,
         skipped_no_gold_in_selection=skipped_no_gold,
         skipped_over_budget=skipped_over_budget))

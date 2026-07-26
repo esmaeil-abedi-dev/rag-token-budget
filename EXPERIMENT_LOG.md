@@ -438,3 +438,30 @@ skip when outputs exist without a manifest record; unreachable emb cache rows
 pruned (21,040 removed, 96 MB -> 26 MB) with the re-key documented above.
 
 ROUND 4 is the verification round: same three lenses, full re-review.
+
+---
+
+## 2026-07-26 14:24 — Review round 4: split verdict, second fix batch (NO API)
+
+Auditor 1 (brief + repo): VERDICT CLEAN — verified both round-3 MAJORs fixed via
+byte-level key simulation and exhaustive workflow simulation of the quarantine
+logic (5 workflows + adversarial variants); full brief-compliance and hygiene
+sweeps passed. Its three minors were fixed anyway: checkpoint filenames now
+carry the corpus fingerprint (stale-corpus checkpoints quarantined by name),
+and 06 guards an empty stats frame.
+
+Auditor 2 (execution + stats): VERDICT NOT CLEAN — confirmed all round-3 fixes
+work (incl. running 05's main() against a stubbed run_block through five
+workflows, and unit-testing all four 07 power branches), but found two new
+MAJORs, both now fixed:
+1. 04c's skip gate counted ATTEMPTED questions, not ablated ones — a
+   tier1-only pass would freeze a partial ablation as final. Skip now also
+   requires skipped_no_assembly == 0 and persists the failure count.
+2. fig_structured_vs_prose CIs bootstrapped correlated rows (4 budgets per
+   question) — now bootstraps per-question mean EM, per the brief's
+   "resample questions, not runs".
+Minors fixed: 04b failure rows carry assembly_from_cache and no longer count
+as coverage (transient failures retry without --force); 07 guards zero
+computable tests; position_ablation.csv header flattened.
+
+ROUND 5 verifies this small surface; loop continues until a fully clean round.

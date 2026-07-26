@@ -269,8 +269,12 @@ def fig_structured_vs_prose(df: pd.DataFrame):
     x = np.arange(len(arms)); w = 0.38
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    def mean_ci(series):
-        v = series.to_numpy().astype(float)
+    def mean_ci(g: pd.DataFrame):
+        """Bootstrap over QUESTIONS (per-question mean EM first): pooled budgets
+        contribute 4 correlated rows per question, and resampling rows would
+        make the 95% bars anti-conservative — the brief mandates resampling
+        questions, not runs."""
+        v = g.groupby("question_id")["em"].mean().to_numpy().astype(float)
         if not len(v):
             return np.nan, 0.0
         idx = RNG.integers(0, len(v), size=(2000, len(v)))
@@ -278,8 +282,8 @@ def fig_structured_vs_prose(df: pd.DataFrame):
         lo, hi = np.percentile(v[idx].mean(axis=1), [2.5, 97.5])
         return m, max(m - lo, hi - m)
 
-    pm_ci = [mean_ci(prose[prose.arm == a]["em"]) for a in arms]
-    sm_ci = [mean_ci(struct[struct.arm == a]["em"]) for a in arms]
+    pm_ci = [mean_ci(prose[prose.arm == a]) for a in arms]
+    sm_ci = [mean_ci(struct[struct.arm == a]) for a in arms]
     pm = [m for m, _ in pm_ci]; sm = [m for m, _ in sm_ci]
     ax.bar(x - w / 2, pm, w, yerr=[e for _, e in pm_ci], capsize=4,
            label="prose (primary sweep)")
@@ -557,6 +561,9 @@ def main():
 
     tests = run_tests(df)
     tdf = pd.DataFrame(tests)
+    if not len(tdf):  # partial sweep can yield zero testable comparisons
+        tdf = pd.DataFrame(columns=["rq", "comparison", "test", "budget", "p_raw",
+                                    "p_adj", "effect", "primary_comparison"])
     tdf.to_csv(OUTPUTS / "stats_tests.csv", index=False)
 
     cc = confound_checks(df)

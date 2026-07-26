@@ -150,7 +150,9 @@ def run_block(questions: list[dict], *, sweep: str, arm: str, budget, ctx,
     records, AND the assembly cache; `arm_kwargs` are hyperparameter overrides
     passed to the arm (e.g. hops=1)."""
     label = arm_label or arm
-    ckpt = PARTIAL_DIR / f"{sweep}__{label}__{budget}.parquet"
+    # fingerprint in the filename: a checkpoint from a rebuilt corpus must
+    # never be resumed as if current (question IDs survive rebuilds)
+    ckpt = PARTIAL_DIR / f"{sweep}__{label}__{budget}__{corpus_fingerprint()}.parquet"
     want_ids = {q["question_id"] for q in questions}
     if ckpt.exists() and not force:
         df = pd.read_parquet(ckpt)

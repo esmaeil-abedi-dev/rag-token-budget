@@ -80,8 +80,13 @@ def main():
             primary_comparison=bool(t["primary_comparison"]),
         ))
     df = pd.DataFrame(rows)
+    if not len(df):  # zero computable tests (extreme partial data)
+        df = pd.DataFrame(columns=["rq", "comparison", "budget", "test", "observed_effect",
+                                   "n_assumed_synopsis", "n_observed_effect", "formula",
+                                   "alpha", "power", "primary_comparison"])
     df.to_csv(OUTPUTS / "sample_size_observed.csv", index=False)
-    print(df[df.primary_comparison].to_string(index=False))
+    if len(df):
+        print(df[df.primary_comparison].to_string(index=False))
 
     import matplotlib
 

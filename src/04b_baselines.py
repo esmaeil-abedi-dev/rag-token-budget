@@ -80,6 +80,8 @@ def main():
     # condition — a --limit smoke run must never freeze the full deliverable
     if BASELINES.exists() and not args.force:
         prev = pd.read_parquet(BASELINES)
+        if "failed" in prev.columns:  # failed rows don't count as coverage: retry them
+            prev = prev[~prev["failed"].astype(bool)]
         want = {q["question_id"] for q in qp}
         covered = all(
             want <= set(prev[prev.arm == cond]["question_id"])
@@ -142,6 +144,7 @@ def main():
                             predicted_answer="",
                             gold_answer=_json.dumps([str(g) for g in q["gold_answers"]]),
                             em=float("nan"), f1=float("nan"), gen_cached=False,
+                            assembly_from_cache=False,
                             retrieval_gold_in_pool=False, empty_context=False,
                             arm_meta=_json.dumps({"error": repr(e)[:300]}), wall_s=0.0,
                             failed=True, faithfulness=float("nan"),

@@ -199,10 +199,17 @@ def main():
         executed.add("sensitivity_h1")
     reduced = bool(args.limit or args.tier1_only)
 
+    from runner import corpus_fingerprint
+
+    fp_now = corpus_fingerprint()
     frames_ok, quarantined = [], []
     for p in sorted(PARTIAL_DIR.glob("*.parquet")):
+        parts = p.stem.split("__")
+        if len(parts) >= 4 and parts[3] != fp_now:
+            quarantined.append(f"{p.name} (stale corpus fingerprint)")
+            continue
         cdf_ = pd.read_parquet(p)
-        sweep_name = p.name.split("__")[0]
+        sweep_name = parts[0]
         if reduced and sweep_name in executed:
             expected = this_run_ids.get(sweep_name)
         else:
