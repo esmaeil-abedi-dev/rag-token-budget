@@ -111,6 +111,62 @@ def update_manifest(**kwargs) -> dict:
 # ---------------------------------------------------------------- OpenRouter
 
 
+# ---------------------------------------------------------------- cache DB
+# One SQLite file instead of per-call JSON files: the external drive is ExFAT
+# with large allocation clusters, so tens of thousands of tiny files waste
+# ~1000x their true size (21 GB observed for 0.4 GB of vectors).
+
+import sqlite3  # noqa: E402
+import threading  # noqa: E402
+
+_db_local = threading.local()
+_DB_PATH = LLM_CACHE / "cache.db"
+
+
+def _cache_db() -> sqlite3.Connection:
+    conn = getattr(_db_local, "conn", None)
+    if conn is None:
+        conn = sqlite3.connect(_DB_PATH, timeout=60)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("CREATE TABLE IF NOT EXISTS llm (key TEXT PRIMARY KEY, payload TEXT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS emb (key TEXT PRIMARY KEY, vec BLOB)")
+        conn.execute("CREATE TABLE IF NOT EXISTS assembled (key TEXT PRIMARY KEY, payload TEXT)")
+        conn.commit()
+        _db_local.conn = conn
+    return conn
+
+
+def cache_get_json(table: str, key: str):
+    row = _cache_db().execute(f"SELECT payload FROM {table} WHERE key=?", (key,)).fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def cache_put_json(table: str, key: str, obj) -> None:
+    conn = _cache_db()
+    conn.execute(f"INSERT OR REPLACE INTO {table} (key, payload) VALUES (?, ?)",
+                 (key, json.dumps(obj)))
+    conn.commit()
+
+
+def cache_get_vec(key: str):
+    import numpy as _np
+
+    row = _cache_db().execute("SELECT vec FROM emb WHERE key=?", (key,)).fetchone()
+    return _np.frombuffer(row[0], dtype=_np.float32).tolist() if row else None
+
+
+def cache_put_vecs(items: list[tuple[str, list[float]]]) -> None:
+    import numpy as _np
+
+    conn = _cache_db()
+    conn.executemany(
+        "INSERT OR REPLACE INTO emb (key, vec) VALUES (?, ?)",
+        [(k, _np.asarray(v, dtype=_np.float32).tobytes()) for k, v in items],
+    )
+    conn.commit()
+
+
 def _api_key() -> str:
     key = os.getenv("OPENROUTER_API_KEY")
     if not key:
@@ -157,10 +213,9 @@ def llm_generate(
     model = model or GENERATOR_MODEL
     params = {"temperature": temperature, "max_tokens": max_tokens, "system": system}
     key = _cache_key({"prompt": prompt, "model": model, "params": params})
-    cache_file = LLM_CACHE / f"{key}.json"
-    if cache_file.exists():
-        d = json.loads(cache_file.read_text())
-        return LLMResult(**{**d, "cached": True})
+    hit = cache_get_json("llm", key)
+    if hit is not None:
+        return LLMResult(**{**hit, "cached": True})
 
     if client is None:
         client = openrouter_client()
@@ -196,16 +251,15 @@ def llm_generate(
                 latency_s=round(latency, 3),
                 cost_usd=cost,
             )
-            cache_file.write_text(
-                json.dumps(
-                    {
-                        "text": result.text,
-                        "input_tokens": result.input_tokens,
-                        "output_tokens": result.output_tokens,
-                        "latency_s": result.latency_s,
-                        "cost_usd": result.cost_usd,
-                    }
-                )
+            cache_put_json(
+                "llm", key,
+                {
+                    "text": result.text,
+                    "input_tokens": result.input_tokens,
+                    "output_tokens": result.output_tokens,
+                    "latency_s": result.latency_s,
+                    "cost_usd": result.cost_usd,
+                },
             )
             return result
         except Exception as e:  # rate limits, transient network
@@ -222,9 +276,9 @@ def embed_texts(texts: list[str], *, batch_size: int = 64) -> "list[list[float]]
     missing_idx = []
     for i, t in enumerate(texts):
         k = _cache_key({"embed": t, "model": EMBEDDING_MODEL})
-        f = EMB_CACHE / f"{k}.json"
-        if f.exists():
-            out[i] = json.loads(f.read_text())
+        hit = cache_get_vec(k)
+        if hit is not None:
+            out[i] = hit
         else:
             missing_idx.append(i)
 
@@ -245,11 +299,12 @@ def embed_texts(texts: list[str], *, batch_size: int = 64) -> "list[list[float]]
                     raise
                 time.sleep(min(2**attempt, 30))
                 print(f"  embed batch retry {attempt + 1}: {e!r}")
+        puts = []
         for j, item in zip(batch, data):
             vec = item["embedding"]
-            k = _cache_key({"embed": texts[j], "model": EMBEDDING_MODEL})
-            (EMB_CACHE / f"{k}.json").write_text(json.dumps(vec))
+            puts.append((_cache_key({"embed": texts[j], "model": EMBEDDING_MODEL}), vec))
             out[j] = vec
+        cache_put_vecs(puts)
     return out
 
 
@@ -259,9 +314,9 @@ def rerank(query: str, documents: list[str], *, top_n: int | None = None) -> lis
     Returns [(index_into_documents, relevance_score)] sorted descending.
     """
     k = _cache_key({"rerank": query, "docs": documents, "model": RERANK_MODEL, "top_n": top_n})
-    f = LLM_CACHE / f"rerank_{k}.json"
-    if f.exists():
-        return [tuple(x) for x in json.loads(f.read_text())]
+    hit = cache_get_json("llm", f"rerank_{k}")
+    if hit is not None:
+        return [tuple(x) for x in hit]
 
     headers = {"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"}
     payload = {"model": RERANK_MODEL, "query": query, "documents": documents}
@@ -284,7 +339,7 @@ def rerank(query: str, documents: list[str], *, top_n: int | None = None) -> lis
         [(item["index"], float(item["relevance_score"])) for item in results],
         key=lambda x: -x[1],
     )
-    f.write_text(json.dumps(ranked))
+    cache_put_json("llm", f"rerank_{k}", ranked)
     return ranked
 
 

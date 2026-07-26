@@ -113,3 +113,112 @@ judge ~$8–12, embeddings+rerank <$1). Hard confirmation prompt before each swe
   `cohere/rerank-v3.5` top-ranked the relevant document (score 0.903); pgvector 0.8.5
   reachable; judge `openai/gpt-4o-mini` responds. All four OpenRouter integrations are
   therefore real, not assumed.
+
+---
+
+## 2026-07-26 12:41 — Stage 01 acquire — run complete
+
+```
+primary questions: 600 (multi=300, single=300)
+structured questions: 0
+passage pool: 24866 passages (4133 gold-linked)
+per dataset:
+dataset       hop_type
+hotpotqa      multi       150
+ms_marco      single      100
+multihop_rag  multi       150
+nq_open_gold  single      100
+squad_v2      single      100
+failures: {'liverag': "RuntimeError('no usable LiveRAG release found on the Hub (last: None)')", 'wikitablequestions': 'DatasetNotFoundError("Revision \'refs/convert/parquet\' doesn\'t exist for dataset \'wikitablequestions\' on the Hub.")'}
+```
+Outputs: questions_primary.parquet, questions_structured.parquet, passages_pool.parquet, raw_profile.csv, fig_dataset_profile.png. Seed 42.
+
+---
+
+## 2026-07-26 12:42 — Stage 01 acquire — run complete
+
+```
+primary questions: 600 (multi=300, single=300)
+structured questions: 0
+passage pool: 24866 passages (4133 gold-linked)
+per dataset:
+dataset       hop_type
+hotpotqa      multi       150
+ms_marco      single      100
+multihop_rag  multi       150
+nq_open_gold  single      100
+squad_v2      single      100
+failures: {'liverag': "RuntimeError('no usable LiveRAG release found on the Hub (last: None)')", 'wikitablequestions': 'DatasetNotFoundError("Revision \'refs/convert/parquet\' doesn\'t exist for dataset \'stanfordnlp/wikitablequestions\' on the Hub.")'}
+```
+Outputs: questions_primary.parquet, questions_structured.parquet, passages_pool.parquet, raw_profile.csv, fig_dataset_profile.png. Seed 42.
+
+---
+
+## 2026-07-26 12:44 — Stage 01 acquire — run complete
+
+```
+primary questions: 600 (multi=300, single=300)
+structured questions: 600
+passage pool: 25951 passages (4650 gold-linked)
+per dataset:
+dataset       hop_type
+hotpotqa      multi       150
+ms_marco      single      100
+multihop_rag  multi       150
+nq_open_gold  single      100
+squad_v2      single      100
+failures: {'liverag': "RuntimeError('no usable LiveRAG release found on the Hub (last: None)')"}
+```
+Outputs: questions_primary.parquet, questions_structured.parquet, passages_pool.parquet, raw_profile.csv, fig_dataset_profile.png. Seed 42.
+
+---
+
+## 2026-07-26 12:45 — Stage 01 acquire — run complete
+
+```
+primary questions: 600 (multi=300, single=300)
+structured questions: 600
+passage pool: 26689 passages (4663 gold-linked)
+per dataset:
+dataset       hop_type
+hotpotqa      multi       150
+liverag       single       75
+ms_marco      single       75
+multihop_rag  multi       150
+nq_open_gold  single       75
+squad_v2      single       75
+failures: none
+```
+Outputs: questions_primary.parquet, questions_structured.parquet, passages_pool.parquet, raw_profile.csv, fig_dataset_profile.png. Seed 42.
+
+---
+
+## 2026-07-26 12:47 — Stage 02 clean — run complete
+
+```
+questions: primary 600, structured 600
+corpus: 26114 passages -> 76168 chunks (mean 110.2 tokens; 13447 structured)
+gold coverage: primary questions with >=1 matched gold passage: 600/600
+```
+Full step log in outputs/data_cleaning_log.csv.
+
+---
+
+## 2026-07-26 13:00 — Stage 06 analysis
+
+```
+results rows: 120; tests: 40 (11 significant after BH-FDR); figures written (300 dpi)
+```
+
+---
+
+## 2026-07-26 13:00 — Stage 07 power refresh
+
+```
+ rq                        comparison budget             test  observed_effect  n_assumed_synopsis  n_observed_effect                 formula  alpha  power  primary_comparison
+RQ1        graph_select vs naive_topk   1000 two_proportion_z           0.2019                 170                386  n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
+RQ1        graph_select vs naive_topk   1000    mcnemar_exact           1.5000                 170                391 discordant-pair formula   0.05    0.8                True
+RQ3        graph_select vs naive_topk   1000 two_proportion_z           0.2019                 356                386  n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
+RQ3        graph_select vs naive_topk   1000    mcnemar_exact           1.5000                 356                391 discordant-pair formula   0.05    0.8                True
+RQ4 graph_select: structured vs prose pooled two_proportion_z          -0.0528                 564               5626  n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
+```

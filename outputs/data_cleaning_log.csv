@@ -1,0 +1,11 @@
+Issue,Variables Affected,Detection Method,Treatment Applied,Rationale,N Before,N After,Pct Removed
+Empty/missing gold answers (primary),gold_answers,len==0 or all-whitespace strings,Drop question,EM/F1 need a gold string; unanswerable items are unscoreable,600,600,0.0
+Empty/missing gold answers (structured),gold_answers,len==0 or all-whitespace strings,Drop question,EM/F1 need a gold string; unanswerable items are unscoreable,600,600,0.0
+Markup/boilerplate in passages,text,"regex (HTML tags, wiki refs, entities); 174 passages matched",Strip matched spans,Markup wastes budget tokens and pollutes embeddings,26689,26689,0.0
+Unicode/whitespace irregularities,text,NFKC + whitespace collapse changed 2733 passages,"Normalize NFKC, collapse runs of spaces/newlines",Stable tokenization and duplicate detection,26689,26689,0.0
+Exact duplicate passages,text,normalized-text hash collision,Keep one copy (gold-linked copy preferred),Duplicates waste budget and double-count evidence,26689,26138,2.06
+Near-duplicate passages,text,"MinHash LSH, 5-word shingles, Jaccard >= 0.9",Drop later copy (gold passages exempt),Near-dups from overlapping sources inflate retrieval scores,26138,26114,0.09
+Gold evidence absent from corpus (primary),"gold_passages, gold_passage_ids",normalized exact/containment match against cleaned corpus,Drop question,An arm cannot retrieve evidence the corpus no longer contains,600,600,0.0
+Gold evidence absent from corpus (structured),"gold_passages, gold_passage_ids",normalized exact/containment match against cleaned corpus,Drop question,An arm cannot retrieve evidence the corpus no longer contains,600,600,0.0
+"Chunking (128-token target, 32 overlap)",text -> chunks,generator tokenizer; sub-20-token tails dropped,26114 passages -> 76168 chunks,Fixed-size chunks make budget arithmetic exact across arms,26114,76168,-191.67
+Structured content inside prose corpora,content_type,"regex: markdown tables, code fences, bullet runs, pipe-delimited rows",Tagged 1312 chunks content_type=structured,RQ4 compares structured vs prose; the label must exist on every chunk,76168,76168,0.0

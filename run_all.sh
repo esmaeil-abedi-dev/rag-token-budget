@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# End-to-end pipeline: 01 -> 07. Each stage caches to data/ and skips if done.
-# Usage: ./run_all.sh [--force] [--limit N]   (flags passed through where relevant)
+# End-to-end pipeline. Each stage caches to data/ and skips if done (--force).
+# API-spending stages (03 embeddings, 04 compliance, 04b, 04c, 05) project
+# their cost and 05 requires explicit confirmation (--yes to skip the prompt).
 set -euo pipefail
 cd "$(dirname "$0")"
 PY=.venv/bin/python
 
-$PY src/01_acquire.py "$@"
-$PY src/02_clean.py "$@"
-$PY src/03_index.py "$@"
-$PY src/04_arms.py "$@"
-$PY src/05_run.py "$@"
-$PY src/06_analyze.py
-$PY src/07_power.py
+$PY src/01_acquire.py "$@"          # datasets + sampling (no API)
+$PY src/02_clean.py "$@"            # cleaning + chunking (no API)
+$PY src/03_index.py "$@"            # embeddings via OpenRouter + validation gate
+$PY src/04_arms.py "$@"             # graph build + budget compliance
+$PY src/05_run.py "$@"              # THE SWEEPS (prints cost, asks confirmation)
+$PY src/04b_baselines.py "$@"       # floor/ceiling/random/full-context
+$PY src/04c_position.py "$@"        # lost-in-the-middle ablation
+$PY src/06_analyze.py               # stats + figures (no API)
+$PY src/07_power.py                 # observed-effect power refresh (no API)
 echo "Pipeline complete. See outputs/RESULTS_SUMMARY.md"

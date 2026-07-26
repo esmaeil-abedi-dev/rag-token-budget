@@ -1,0 +1,423 @@
+"""Stage 06 — statistics and figures. No API calls; consumes eval_records.parquet.
+
+Reports BOTH test families, per the brief:
+  pre-registered: two-proportion z with Cohen's h (RQ1/RQ3/RQ4), paired t (RQ2)
+  paired-appropriate: McNemar exact with discordant counts (RQ1/RQ3)
+Benjamini–Hochberg FDR within each RQ family; paired bootstrap 95% CIs
+(10k resamples over questions); effect sizes reported with the CIs.
+
+Outputs: fig_pareto, fig_accuracy_by_budget, fig_hop_breakdown, fig_by_dataset,
+fig_structured_vs_prose, fig_latency_cost (all 300 dpi),
+preliminary_results.csv, stats_tests.csv, graph_confound_checks.csv.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from scipy import stats as sps
+
+sys.path.insert(0, str(Path(__file__).parent))
+from common import BUDGETS, DATA, OUTPUTS, SEED, append_log, update_manifest  # noqa: E402
+
+ARM_ORDER = ["naive_topk", "naive_topk_dedup", "rerank_topk", "compress_llmlingua",
+             "summarize_recomp", "graph_select"]
+SYNOPSIS_ARMS = ["naive_topk", "rerank_topk", "compress_llmlingua",
+                 "summarize_recomp", "graph_select"]
+N_BOOT = 10_000
+RNG = np.random.default_rng(SEED)
+
+PRIMARY_BUDGET = 1000  # pre-declared primary comparisons live at this budget
+
+
+def cohens_h(p1: float, p2: float) -> float:
+    return 2 * np.arcsin(np.sqrt(p1)) - 2 * np.arcsin(np.sqrt(p2))
+
+
+def boot_ci(values: np.ndarray, idx_matrix: np.ndarray) -> tuple[float, float]:
+    means = values[idx_matrix].mean(axis=1)
+    return float(np.percentile(means, 2.5)), float(np.percentile(means, 97.5))
+
+
+def paired_frame(df: pd.DataFrame, arm_a: str, arm_b: str, budget) -> pd.DataFrame:
+    a = df[(df.arm == arm_a) & (df.budget == budget)][["question_id", "em", "f1"]]
+    b = df[(df.arm == arm_b) & (df.budget == budget)][["question_id", "em", "f1"]]
+    return a.merge(b, on="question_id", suffixes=("_a", "_b"))
+
+
+def mcnemar_exact(m: pd.DataFrame) -> dict:
+    b = int(((m.em_a == 1) & (m.em_b == 0)).sum())
+    c = int(((m.em_a == 0) & (m.em_b == 1)).sum())
+    from statsmodels.stats.contingency_tables import mcnemar as _mc
+
+    table = [[int(((m.em_a == 1) & (m.em_b == 1)).sum()), b],
+             [c, int(((m.em_a == 0) & (m.em_b == 0)).sum())]]
+    res = _mc(table, exact=True)
+    return dict(b=b, c=c, statistic=float(res.statistic), p=float(res.pvalue))
+
+
+def two_prop(m: pd.DataFrame) -> dict:
+    from statsmodels.stats.proportion import proportions_ztest
+
+    n = len(m)
+    x1, x2 = int(m.em_a.sum()), int(m.em_b.sum())
+    stat, p = proportions_ztest([x1, x2], [n, n])
+    p1, p2 = x1 / n, x2 / n
+    diffs = []
+    idx = RNG.integers(0, n, size=(2000, n))
+    ea, eb = m.em_a.to_numpy(), m.em_b.to_numpy()
+    for row in idx:
+        diffs.append(cohens_h(ea[row].mean(), eb[row].mean()))
+    return dict(statistic=float(stat), p=float(p), h=cohens_h(p1, p2),
+                h_ci_lo=float(np.percentile(diffs, 2.5)),
+                h_ci_hi=float(np.percentile(diffs, 97.5)),
+                p1=p1, p2=p2, n=n)
+
+
+def bh_adjust(rows: list[dict]) -> None:
+    """BH-FDR within each (rq, test) family, in place."""
+    from statsmodels.stats.multitest import multipletests
+
+    df = pd.DataFrame(rows)
+    for _, g in df.groupby(["rq", "test"]):
+        adj = multipletests(g["p_raw"], method="fdr_bh")[1]
+        for i, (ridx, _) in enumerate(g.iterrows()):
+            rows[ridx]["p_adj"] = float(adj[i])
+            rows[ridx]["family_size"] = len(g)
+
+
+def results_table(df: pd.DataFrame) -> pd.DataFrame:
+    out = []
+    for (sweep, arm, budget), g in df.groupby(["sweep", "arm", "budget"]):
+        g = g.sort_values("question_id")
+        idx = RNG.integers(0, len(g), size=(N_BOOT, len(g)))
+        em = g["em"].to_numpy().astype(float)
+        f1 = g["f1"].to_numpy()
+        em_lo, em_hi = boot_ci(em, idx)
+        f1_lo, f1_hi = boot_ci(f1, idx)
+        for hop, gg in [("all", g)] + list(g.groupby("hop_type")):
+            row = dict(
+                sweep=sweep, arm=arm, budget=budget, hop_type=hop, n=len(gg),
+                em=round(gg["em"].mean(), 4), f1=round(gg["f1"].mean(), 4),
+                faithfulness=round(gg["faithfulness"].mean(), 4),
+                answer_relevance=round(gg["answer_relevance"].mean(), 4),
+                mean_gen_input_tokens=round(gg["gen_input_tokens"].mean(), 1),
+                mean_total_tokens=round(float((gg["gen_input_tokens"]
+                                               + gg["assembly_input_tokens"]
+                                               + gg["assembly_output_tokens"]).mean()), 1),
+                mean_cost_usd=round(float((gg["cost_gen_usd"] + gg["cost_assembly_usd"]
+                                           + gg.get("judge_cost_usd", 0)).mean()), 6),
+                mean_latency_s=round(float((gg["latency_gen_s"]
+                                            + gg["latency_assembly_s"]).mean()), 3),
+            )
+            if hop == "all":
+                row.update(em_ci_lo=round(em_lo, 4), em_ci_hi=round(em_hi, 4),
+                           f1_ci_lo=round(f1_lo, 4), f1_ci_hi=round(f1_hi, 4),
+                           apt_generator=round(row["em"] / max(row["mean_gen_input_tokens"], 1) * 1000, 4),
+                           apt_total=round(row["em"] / max(row["mean_total_tokens"], 1) * 1000, 4))
+            out.append(row)
+    return pd.DataFrame(out)
+
+
+# ---------------------------------------------------------------- figures
+
+
+def fig_pareto(res: pd.DataFrame):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    sub = res[(res.sweep == "primary") & (res.hop_type == "all")]
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
+    for ax, xcol, title in [
+        (axes[0], "mean_gen_input_tokens", "APT_generator accounting (Synopsis metric)"),
+        (axes[1], "mean_total_tokens", "APT_total accounting (incl. assembly tokens)"),
+    ]:
+        pts = []
+        for arm in ARM_ORDER:
+            g = sub[sub.arm == arm].sort_values("budget")
+            if not len(g):
+                continue
+            ax.plot(g[xcol], g["em"], marker="o", label=arm)
+            pts += list(zip(g[xcol], g["em"]))
+        # Pareto frontier: not dominated (someone with <= tokens and >= EM)
+        frontier = [p for p in pts
+                    if not any((q[0] <= p[0] and q[1] > p[1]) or (q[0] < p[0] and q[1] >= p[1])
+                               for q in pts if q != p)]
+        frontier.sort()
+        if frontier:
+            fx, fy = zip(*frontier)
+            ax.plot(fx, fy, "k--", lw=1.5, alpha=0.7, label="Pareto frontier")
+        ax.set_xscale("log")
+        ax.set_xlabel("mean input tokens per question (log)")
+        ax.set_title(title)
+        ax.grid(alpha=0.3)
+    axes[0].set_ylabel("Exact match")
+    axes[0].legend(fontsize=8)
+    fig.suptitle("Answer quality per token — the headline comparison (primary sweep, n=600)")
+    fig.tight_layout()
+    fig.savefig(OUTPUTS / "fig_pareto.png", dpi=300)
+
+
+def fig_accuracy_by_budget(res: pd.DataFrame):
+    import matplotlib.pyplot as plt
+
+    sub = res[(res.sweep == "primary") & (res.hop_type == "all")]
+    fig, ax = plt.subplots(figsize=(9, 6))
+    for arm in ARM_ORDER:
+        g = sub[sub.arm == arm].sort_values("budget")
+        if not len(g):
+            continue
+        ax.errorbar(g["budget"], g["em"],
+                    yerr=[g["em"] - g["em_ci_lo"], g["em_ci_hi"] - g["em"]],
+                    marker="o", capsize=4, label=arm)
+    ax.set_xscale("log"); ax.set_xticks(BUDGETS); ax.set_xticklabels(BUDGETS)
+    ax.set_xlabel("token budget"); ax.set_ylabel("Exact match (95% bootstrap CI)")
+    ax.set_title("Accuracy vs token budget — primary sweep (n=600, paired bootstrap)")
+    ax.grid(alpha=0.3); ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(OUTPUTS / "fig_accuracy_by_budget.png", dpi=300)
+
+
+def fig_hop_breakdown(res: pd.DataFrame):
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5), sharey=True)
+    for ax, hop in zip(axes, ["single", "multi"]):
+        sub = res[(res.sweep == "primary") & (res.hop_type == hop)]
+        for arm in ARM_ORDER:
+            g = sub[sub.arm == arm].sort_values("budget")
+            if len(g):
+                ax.plot(g["budget"], g["em"], marker="o", label=arm)
+        ax.set_xscale("log"); ax.set_xticks(BUDGETS); ax.set_xticklabels(BUDGETS)
+        ax.set_title(f"{hop}-hop questions"); ax.set_xlabel("token budget"); ax.grid(alpha=0.3)
+    axes[0].set_ylabel("Exact match"); axes[0].legend(fontsize=8)
+    fig.suptitle("RQ2 — single-hop vs multi-hop (primary sweep)")
+    fig.tight_layout()
+    fig.savefig(OUTPUTS / "fig_hop_breakdown.png", dpi=300)
+
+
+def fig_by_dataset(df: pd.DataFrame):
+    import matplotlib.pyplot as plt
+
+    prim = df[df.sweep == "primary"]
+    datasets = sorted(prim.dataset.unique())
+    fig, axes = plt.subplots(2, 3, figsize=(16, 9), sharey=True)
+    for ax, ds in zip(axes.flat, datasets):
+        sub = prim[prim.dataset == ds]
+        for arm in ARM_ORDER:
+            g = (sub[sub.arm == arm].groupby("budget")["em"].mean().reset_index()
+                 .sort_values("budget"))
+            if len(g):
+                ax.plot(g["budget"], g["em"], marker="o", label=arm)
+        ax.set_xscale("log"); ax.set_xticks(BUDGETS); ax.set_xticklabels(BUDGETS)
+        ax.set_title(f"{ds} (n={sub.question_id.nunique()}, descriptive)")
+        ax.grid(alpha=0.3)
+    for ax in axes.flat[len(datasets):]:
+        ax.axis("off")
+    axes[0][0].legend(fontsize=7)
+    fig.suptitle("Per-dataset breakdown — exploratory (per-dataset slices are underpowered; "
+                 "significance claims attach only to pooled results)")
+    fig.tight_layout()
+    fig.savefig(OUTPUTS / "fig_by_dataset.png", dpi=300)
+
+
+def fig_structured_vs_prose(df: pd.DataFrame):
+    import matplotlib.pyplot as plt
+
+    prose = df[(df.sweep == "primary") & (df.content_type == "prose")]
+    struct = df[df.sweep == "structured"]
+    arms = [a for a in ARM_ORDER if a in set(df.arm)]
+    x = np.arange(len(arms)); w = 0.38
+    fig, ax = plt.subplots(figsize=(10, 6))
+    pm = [prose[prose.arm == a]["em"].mean() for a in arms]
+    sm = [struct[struct.arm == a]["em"].mean() for a in arms]
+    ax.bar(x - w / 2, pm, w, label="prose (primary sweep)")
+    ax.bar(x + w / 2, sm, w, label="structured (RQ4 sweep)")
+    for i, (a, b) in enumerate(zip(pm, sm)):
+        if a and not np.isnan(a) and b and not np.isnan(b):
+            ax.annotate(f"{(b - a):+.2f}", (x[i], max(a, b) + 0.01), ha="center", fontsize=8)
+    ax.set_xticks(x); ax.set_xticklabels(arms, rotation=20, ha="right")
+    ax.set_ylabel("Exact match (pooled over budgets)")
+    ax.set_title("RQ4 — accuracy on structured/table content vs prose, per arm")
+    ax.legend(); ax.grid(alpha=0.3, axis="y")
+    fig.tight_layout()
+    fig.savefig(OUTPUTS / "fig_structured_vs_prose.png", dpi=300)
+
+
+def fig_latency_cost(df: pd.DataFrame):
+    import matplotlib.pyplot as plt
+
+    prim = df[df.sweep == "primary"]
+    arms = [a for a in ARM_ORDER if a in set(prim.arm)]
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.5))
+    la = [prim[prim.arm == a]["latency_assembly_s"].mean() for a in arms]
+    lg = [prim[prim.arm == a]["latency_gen_s"].mean() for a in arms]
+    axes[0].bar(arms, la, label="assembly")
+    axes[0].bar(arms, lg, bottom=la, label="generation")
+    axes[0].set_ylabel("mean latency (s)"); axes[0].set_title("Latency per question")
+    axes[0].tick_params(axis="x", rotation=20); axes[0].legend()
+    ca = [prim[prim.arm == a]["cost_assembly_usd"].mean() * 1000 for a in arms]
+    cg = [prim[prim.arm == a]["cost_gen_usd"].mean() * 1000 for a in arms]
+    axes[1].bar(arms, ca, label="assembly")
+    axes[1].bar(arms, cg, bottom=ca, label="generation")
+    axes[1].set_ylabel("mean cost per question (m$)"); axes[1].set_title("Cost per question")
+    axes[1].tick_params(axis="x", rotation=20); axes[1].legend()
+    for ax in axes:
+        ax.grid(alpha=0.3, axis="y")
+    fig.suptitle("Latency and cost per arm (primary sweep; assembly vs generation)")
+    fig.tight_layout()
+    fig.savefig(OUTPUTS / "fig_latency_cost.png", dpi=300)
+
+
+# ---------------------------------------------------------------- tests
+
+
+def run_tests(df: pd.DataFrame) -> list[dict]:
+    prim = df[df.sweep == "primary"]
+    rows: list[dict] = []
+
+    def add(rq, comparison, test, budget, d: dict, effect_name, effect, ci=(None, None),
+            n=None, primary=False, note=""):
+        rows.append(dict(rq=rq, comparison=comparison, test=test, budget=budget,
+                         statistic=d.get("statistic"), p_raw=d["p"], p_adj=None,
+                         effect_name=effect_name, effect=effect,
+                         effect_ci_lo=ci[0], effect_ci_hi=ci[1],
+                         n=n or d.get("n"), n_discordant_b=d.get("b"),
+                         n_discordant_c=d.get("c"), primary_comparison=primary,
+                         note=note))
+
+    # RQ1: best Synopsis arm vs naive, per budget
+    for budget in BUDGETS:
+        by_em = (prim[(prim.budget == budget) & (prim.arm.isin(SYNOPSIS_ARMS))]
+                 .groupby("arm")["em"].mean())
+        best = by_em.drop("naive_topk").idxmax()
+        m = paired_frame(prim, best, "naive_topk", budget)
+        tp = two_prop(m)
+        add("RQ1", f"{best} vs naive_topk", "two_proportion_z", budget, tp,
+            "cohens_h", tp["h"], (tp["h_ci_lo"], tp["h_ci_hi"]),
+            primary=(budget == PRIMARY_BUDGET))
+        mc = mcnemar_exact(m)
+        add("RQ1", f"{best} vs naive_topk", "mcnemar_exact", budget, mc,
+            "discordant_odds", (mc["b"] / mc["c"]) if mc["c"] else np.inf,
+            n=len(m), primary=(budget == PRIMARY_BUDGET))
+
+    # RQ3: graph vs naive AND graph vs naive_dedup (the confound), per budget
+    for other in ["naive_topk", "naive_topk_dedup", "rerank_topk"]:
+        for budget in BUDGETS:
+            m = paired_frame(prim, "graph_select", other, budget)
+            if not len(m):
+                continue
+            tp = two_prop(m)
+            add("RQ3", f"graph_select vs {other}", "two_proportion_z", budget, tp,
+                "cohens_h", tp["h"], (tp["h_ci_lo"], tp["h_ci_hi"]),
+                primary=(budget == PRIMARY_BUDGET and other == "naive_topk"))
+            mc = mcnemar_exact(m)
+            add("RQ3", f"graph_select vs {other}", "mcnemar_exact", budget, mc,
+                "discordant_odds", (mc["b"] / mc["c"]) if mc["c"] else np.inf,
+                n=len(m), primary=(budget == PRIMARY_BUDGET and other == "naive_topk"))
+
+    # RQ2: budget slope, single vs multi (per-question F1 slope across budgets)
+    slopes = {}
+    for hop, g in prim[prim.arm.isin(SYNOPSIS_ARMS)].groupby("hop_type"):
+        per_q = g.pivot_table(index=["question_id", "arm"], columns="budget", values="f1")
+        per_q = per_q.dropna()
+        x = np.log2(np.array(BUDGETS, dtype=float))
+        y = per_q[BUDGETS].to_numpy()
+        s = ((y - y.mean(axis=1, keepdims=True)) @ (x - x.mean())) / ((x - x.mean()) ** 2).sum()
+        slopes[hop] = s
+        t, p = sps.ttest_rel(per_q[4000], per_q[500])
+        add("RQ2", f"{hop}: F1@4000 vs F1@500 (paired)", "paired_t", "500vs4000",
+            dict(statistic=float(t), p=float(p)), "mean_diff",
+            float((per_q[4000] - per_q[500]).mean()), n=len(per_q))
+    if "multi" in slopes and "single" in slopes:
+        t, p = sps.ttest_ind(slopes["multi"], slopes["single"], equal_var=False)
+        d_eff = ((slopes["multi"].mean() - slopes["single"].mean())
+                 / np.sqrt((slopes["multi"].var() + slopes["single"].var()) / 2))
+        add("RQ2", "F1-per-log2(budget) slope: multi vs single", "welch_t", "slope",
+            dict(statistic=float(t), p=float(p)), "cohens_d", float(d_eff),
+            n=len(slopes["multi"]) + len(slopes["single"]), primary=True)
+    else:
+        print(f"  [06] RQ2 slope contrast skipped: hop types present = {sorted(slopes)}")
+
+    # RQ4: structured sweep vs prose primary, per arm (unpaired — different
+    # questions — so pre-registered two-proportion only; noted)
+    struct = df[df.sweep == "structured"]
+    prose = prim[prim.content_type == "prose"]
+    for arm in SYNOPSIS_ARMS:
+        a = struct[struct.arm == arm]["em"]
+        b = prose[prose.arm == arm]["em"]
+        if not len(a) or not len(b):
+            continue
+        from statsmodels.stats.proportion import proportions_ztest
+
+        stat, p = proportions_ztest([int(a.sum()), int(b.sum())], [len(a), len(b)])
+        h = cohens_h(a.mean(), b.mean())
+        add("RQ4", f"{arm}: structured vs prose", "two_proportion_z", "pooled",
+            dict(statistic=float(stat), p=float(p)), "cohens_h", float(h),
+            n=len(a) + len(b), primary=(arm == "graph_select"),
+            note="unpaired (different question sets) — McNemar not applicable")
+
+    bh_adjust(rows)
+    return rows
+
+
+def confound_checks(df: pd.DataFrame) -> pd.DataFrame:
+    prim = df[df.sweep == "primary"]
+    out = []
+    # budget parity: realized context tokens per arm at each budget
+    for (arm, budget), g in prim.groupby(["arm", "budget"]):
+        out.append(dict(check="budget_parity", arm=arm, budget=budget,
+                        value=round(g["gen_context_tokens"].mean(), 1),
+                        detail="mean realized context tokens"))
+    # retrieval-success stratification
+    for (arm, budget), g in prim.groupby(["arm", "budget"]):
+        for flag, gg in g.groupby("retrieval_gold_in_pool"):
+            out.append(dict(check="retrieval_stratification", arm=arm, budget=budget,
+                            value=round(gg["em"].mean(), 4),
+                            detail=f"EM | gold_in_pool={flag} (n={len(gg)})"))
+    return pd.DataFrame(out)
+
+
+def main():
+    df = pd.read_parquet(DATA / "eval_records.parquet")
+    df = df[df.sweep.isin(["primary", "structured"])]
+    print(f"[06] {len(df)} records")
+
+    res = results_table(df)
+    base = DATA / "baseline_records.parquet"
+    if base.exists():
+        bdf = pd.read_parquet(base)
+        res = pd.concat([res, results_table(bdf)], ignore_index=True)
+    res.to_csv(OUTPUTS / "preliminary_results.csv", index=False)
+
+    fig_pareto(res)
+    fig_accuracy_by_budget(res)
+    fig_hop_breakdown(res)
+    fig_by_dataset(df)
+    fig_structured_vs_prose(df)
+    fig_latency_cost(df)
+
+    tests = run_tests(df)
+    tdf = pd.DataFrame(tests)
+    tdf.to_csv(OUTPUTS / "stats_tests.csv", index=False)
+
+    cc = confound_checks(df)
+    cc.to_csv(OUTPUTS / "graph_confound_checks.csv", index=False)
+
+    n_sig = int((tdf["p_adj"] < 0.05).sum())
+    summary = (f"results rows: {len(res)}; tests: {len(tdf)} "
+               f"({n_sig} significant after BH-FDR); figures written (300 dpi)")
+    print(summary)
+    prim_pool = res[(res.sweep == "primary") & (res.hop_type == "all")]
+    print(prim_pool.pivot_table(index="arm", columns="budget", values="em").round(3).to_string())
+    update_manifest(stage06=dict(n_tests=len(tdf), n_significant_fdr=n_sig))
+    append_log("Stage 06 analysis", f"```\n{summary}\n```")
+
+
+if __name__ == "__main__":
+    main()
