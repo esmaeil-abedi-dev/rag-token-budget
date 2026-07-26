@@ -1,0 +1,26 @@
+# --- pre-existing local files (not part of the published repo) ---
+CLAUDE_CODE_PROMPT.md
+INTERIM_REPORT_MAP.md
+plan_*.json
+QM 640 Interim Report template-1.docx
+*.docx
+
+# --- secrets ---
+.env
+
+# --- data & caches (outputs/ IS committed — the report cites it) ---
+data/
+!data/sample/
+.cache/
+llm_cache/
+*.parquet
+
+# --- python ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# --- os ---
+.DS_Store
