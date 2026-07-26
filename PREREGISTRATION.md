@@ -5,6 +5,15 @@ timestamp of this file are the evidence that the analysis below was fixed before
 result was seen. (Stage 01–04 artifacts — sampling, cleaning, indexing, budget
 compliance — involve no answer generation and no outcome data.)
 
+**Amendment 1 (2026-07-26, still pre-data):** an independent statistical review of the
+analysis code, conducted before any evaluation ran, found two unit-of-analysis errors in
+the original wording's implementation: RQ2 slopes computed per question×arm (5×
+pseudo-replication) and RQ4 pooling four correlated budget records per question into an
+independence-assuming test. Both are corrected below: **RQ2 uses one slope per question**
+(F1 averaged across arms per budget) and **RQ4 compares at the 1,000-token budget only**
+(one record per question). No outcome data existed at amendment time — verifiable from
+the git history (no eval_records, no sweep checkpoints).
+
 ## Design (fixed)
 
 - 5 Synopsis arms (`naive_topk`, `rerank_topk`, `compress_llmlingua`,
@@ -32,10 +41,10 @@ compliance — involve no answer generation and no outcome data.)
 
 | RQ | Primary comparison | Test |
 |----|--------------------|------|
-| RQ1 | best Synopsis arm vs `naive_topk`, pooled primary sample, **budget 1,000** | two-proportion z (Cohen's h) + McNemar exact |
-| RQ2 | F1-per-log2(budget) slope, multi-hop vs single-hop | Welch t on per-question slopes (paired t on F1\@4000 vs F1\@500 within hop as secondary) |
+| RQ1 | best Synopsis arm vs `naive_topk`, pooled primary sample, **budget 1,000** | two-proportion z (Cohen's h) + McNemar exact; the winner is selected on the same data (max-selection) — reported with that caveat attached |
+| RQ2 | F1-per-log2(budget) slope, multi-hop vs single-hop; **one slope per question** (F1 averaged over the 5 arms at each budget, then least-squares slope) | Welch t on per-question slopes (paired t on question-level F1\@4000 vs F1\@500 within hop as secondary) |
 | RQ3 | `graph_select` vs `naive_topk`, pooled primary sample, **budget 1,000** | two-proportion z (Cohen's h) + McNemar exact |
-| RQ4 | `graph_select` structured vs prose, pooled budgets | two-proportion z (unpaired: different question sets) |
+| RQ4 | `graph_select` structured vs prose, **at budget 1,000 only** (one record per question; pooling budgets would violate independence) | two-proportion z (unpaired: different question sets; content type is confounded with dataset — disclosed) |
 
 - alpha = 0.05; **Benjamini–Hochberg FDR** within each (RQ × test) family;
   raw p, adjusted p, and family size all reported.

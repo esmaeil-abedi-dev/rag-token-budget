@@ -53,14 +53,23 @@ def build_prompt(question: str, context: str | None) -> tuple[str, str]:
     return GEN_SYSTEM, f"Context:\n{context}\n\nQuestion: {question}\nAnswer:"
 
 
-def assemble_cached(q: dict, cands, budget: int, arm: str, extra: dict) -> dict:
+def assemble_cached(q: dict, cands, budget: int, arm: str, extra: dict,
+                    arm_label: str | None = None, arm_kwargs: dict | None = None) -> dict:
     """Assembly results cached (SQLite) — llmlingua compute and RECOMP calls are
-    reused by 04c and by re-runs."""
-    key = f"{arm}_{budget}_{q['question_id']}"
+    reused by 04c and by re-runs.
+
+    The cache key uses arm_label + hyperparameter kwargs, NOT just the arm name:
+    a hops=1 sensitivity run must never collide with the hops=2 primary run
+    (that collision would silently fabricate a "no difference" result)."""
+    arm_kwargs = arm_kwargs or {}
+    label = arm_label or arm
+    kw_sig = "_".join(f"{k}={arm_kwargs[k]}" for k in sorted(arm_kwargs))
+    key = f"{label}_{kw_sig}_{budget}_{q['question_id']}" if kw_sig else \
+          f"{label}_{budget}_{q['question_id']}"
     hit = cache_get_json("assembled", key)
     if hit is not None:
         return hit
-    res = assemble(q["question"], cands, budget, arm, **extra)
+    res = assemble(q["question"], cands, budget, arm, **extra, **arm_kwargs)
     d = dict(text=res.text, chunk_ids=res.chunk_ids,
              gen_context_tokens=res.gen_context_tokens,
              assembly_input_tokens=res.assembly_input_tokens,
@@ -95,6 +104,7 @@ def run_record(q: dict, context_text: str | None, *, sweep: str, arm: str, budge
         f1=f1_score(gen.text, golds),
         gen_cached=gen.cached,
         retrieval_gold_in_pool=gold_in_pool,
+        empty_context=(context_text is not None and not context_text.strip()),
         arm_meta=json.dumps((assembly or {}).get("meta", {})),
         wall_s=round(time.time() - t0, 3),
     )
@@ -105,30 +115,40 @@ def run_record(q: dict, context_text: str | None, *, sweep: str, arm: str, budge
 
 
 def run_block(questions: list[dict], *, sweep: str, arm: str, budget, ctx,
-              workers: int = 8, with_judge=True, force=False) -> pd.DataFrame:
+              workers: int = 8, with_judge=True, force=False,
+              arm_label: str | None = None, arm_kwargs: dict | None = None) -> pd.DataFrame:
     """One (sweep, arm, budget) block with its own checkpoint parquet.
     Assembly runs serially (LLMLingua/MPS is not thread-safe); generation and
-    judging run in parallel threads against cached HTTP clients."""
-    ckpt = PARTIAL_DIR / f"{sweep}__{arm}__{budget}.parquet"
+    judging run in parallel threads against cached HTTP clients.
+
+    `arm_label` names variant runs (e.g. graph_select_h1) in checkpoints,
+    records, AND the assembly cache; `arm_kwargs` are hyperparameter overrides
+    passed to the arm (e.g. hops=1)."""
+    label = arm_label or arm
+    ckpt = PARTIAL_DIR / f"{sweep}__{label}__{budget}.parquet"
+    want_ids = {q["question_id"] for q in questions}
     if ckpt.exists() and not force:
         df = pd.read_parquet(ckpt)
-        if len(df) >= len(questions):
-            return df
+        have_ids = set(df["question_id"])
+        if want_ids <= have_ids:
+            # exact question-ID coverage, not row count: a stale/oversized
+            # checkpoint (e.g. full run reused under --limit) is trimmed
+            return df[df["question_id"].isin(want_ids)].reset_index(drop=True)
     client = openrouter_client()
 
     assembled = []
     for q in questions:
         cands = ctx.candidates(q["question_id"])
         gold_ids = set(q.get("gold_passage_ids", []))
-        gold_in_pool = any(ctx.chunk(c.chunk_id) and
-                           c.chunk_id.rsplit("_c", 1)[0] in gold_ids for c in cands)
+        gold_in_pool = any(c.chunk_id.rsplit("_c", 1)[0] in gold_ids for c in cands)
         extra = ctx.arm_ctx(q["question_id"]) if arm == "graph_select" else {}
-        a = assemble_cached(q, cands, budget, arm, extra)
+        a = assemble_cached(q, cands, budget, arm, extra,
+                            arm_label=arm_label, arm_kwargs=arm_kwargs)
         assembled.append((q, a, gold_in_pool))
 
     def work(item):
         q, a, gip = item
-        return run_record(q, a["text"], sweep=sweep, arm=arm, budget=budget,
+        return run_record(q, a["text"], sweep=sweep, arm=label, budget=budget,
                           assembly=a, gold_in_pool=gip, client=client,
                           with_judge=with_judge)
 

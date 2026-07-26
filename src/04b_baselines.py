@@ -54,7 +54,8 @@ def main():
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--workers", type=int, default=8)
-    args = ap.parse_args()
+    ap.add_argument("--yes", action="store_true", help="skip the spend confirmation")
+    args, _ = ap.parse_known_args()
 
     if BASELINES.exists() and not args.force:
         print("[04b] exists, skipping")
@@ -66,6 +67,18 @@ def main():
     qp = pd.read_parquet(DATA / "questions_primary_clean.parquet").to_dict("records")
     if args.limit:
         qp = qp[: args.limit]
+
+    # projected spend gate (mirrors 05): full_context reads ~12.8k tokens/question
+    n_calls = 4 * len(qp)
+    est = (len(qp) * (90 + 500 + 1000 + 13000) * 0.10 / 1e6  # generation input
+           + n_calls * (1500 * 0.15 + 60 * 0.60) / 1e6)      # judge, rough
+    print(f"[04b] {n_calls} generations + judging, projected <= ${est * 3:.2f}")
+    if not args.yes:
+        resp = input("Proceed? [y/N] ")
+        if resp.strip().lower() not in ("y", "yes"):
+            print("aborted before spending")
+            return
+
     client = openrouter_client()
     rng = np.random.default_rng(SEED)
 
@@ -74,12 +87,22 @@ def main():
         t0 = time.time()
         items = [(q, build_context(cond, q, ctx, rng)) for q in qp]
 
+        def gold_pool_flag(q, _cond):
+            # honest per-condition semantics: only conditions that draw from the
+            # retrieval pool have a meaningful gold-in-pool flag
+            if _cond != "full_context":
+                return _cond == "gold_context"
+            gold_ids = set(q.get("gold_passage_ids", []))
+            return any(c.chunk_id.rsplit("_c", 1)[0] in gold_ids
+                       for c in ctx.candidates(q["question_id"]))
+
         def work(item, _cond=cond):
             q, text = item
             budget = {"no_context": 0, "gold_context": -1,
                       "random_chunks": RANDOM_BUDGET, "full_context": -1}[_cond]
             return run_record(q, text, sweep="baseline", arm=_cond, budget=budget,
-                              assembly=None, gold_in_pool=True, client=client)
+                              assembly=None, gold_in_pool=gold_pool_flag(q, _cond),
+                              client=client)
 
         with ThreadPoolExecutor(max_workers=args.workers) as ex:
             recs = list(ex.map(work, items))

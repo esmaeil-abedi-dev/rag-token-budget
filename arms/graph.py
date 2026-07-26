@@ -32,28 +32,30 @@ def graph_select(question, candidates, budget, *,
 
     seeds = [c.chunk_id for c in sorted(candidates, key=lambda c: -c.score)[:N_SEEDS]]
 
-    # --- expand
+    # --- expand. All set iteration goes through sorted() so results are
+    # deterministic across processes (str hashing is randomized per process).
     nodes = set(seeds)
     frontier = set(seeds)
     for _ in range(hops):
         nxt = set()
-        for cid in frontier:
+        for cid in sorted(frontier):
             nxt.update(graph.get(cid, ()))
         nxt -= nodes
         # cap growth, preferring neighbours similar to the query
         if len(nodes) + len(nxt) > MAX_SUBGRAPH:
-            idxs = [id_to_idx[c] for c in nxt if c in id_to_idx]
-            if idxs:
-                sims = emb[idxs] @ query_vec
-                order = np.argsort(-sims)
-                keep = [list(nxt)[i] for i in order[: MAX_SUBGRAPH - len(nodes)]]
-                nxt = set(keep)
+            nxt_list = sorted(c for c in nxt if c in id_to_idx)
+            if nxt_list:
+                sims = emb[[id_to_idx[c] for c in nxt_list]] @ query_vec
+                order = np.argsort(-sims, kind="stable")
+                nxt = {nxt_list[i] for i in order[: MAX_SUBGRAPH - len(nodes)]}
+            else:
+                nxt = set()
         nodes |= nxt
         frontier = nxt
         if not frontier:
             break
 
-    node_list = [c for c in nodes if c in id_to_idx]
+    node_list = sorted(c for c in nodes if c in id_to_idx)
     idxs = np.array([id_to_idx[c] for c in node_list])
     sims = emb[idxs] @ query_vec  # unit-normalized upstream => cosine
 
@@ -75,7 +77,8 @@ def graph_select(question, candidates, budget, *,
     def fits(cid):
         return used + chunk_lookup[cid].n_tokens + 2 <= budget
 
-    pool = sorted(node_list, key=lambda c: -by_id[c])
+    # ties broken by chunk_id: fully deterministic ordering
+    pool = sorted(node_list, key=lambda c: (-by_id[c], c))
     while pool:
         if not selected:
             cand_pool = [c for c in pool if fits(c)]
@@ -88,13 +91,14 @@ def graph_select(question, candidates, budget, *,
                     disconnected_picks += 1
         if not cand_pool:
             break
-        best = max(cand_pool, key=lambda c: by_id[c])
+        best = min(cand_pool, key=lambda c: (-by_id[c], c))
         pool.remove(best)
         selected.append(best)
         sel_set.add(best)
         used += chunk_lookup[best].n_tokens + 2
 
-    ordered = sorted((chunk_lookup[c] for c in selected), key=lambda ch: -by_id[ch.chunk_id])
+    ordered = sorted((chunk_lookup[c] for c in selected),
+                     key=lambda ch: (-by_id[ch.chunk_id], ch.chunk_id))
     text, ids = greedy_fill(ordered, budget)
     return finalize(
         "graph_select", text, ids, budget,

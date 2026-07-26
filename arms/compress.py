@@ -26,10 +26,24 @@ LLMLINGUA_MODEL = "microsoft/llmlingua-2-bert-base-multilingual-cased-meetingban
 
 _compressor = None
 FALLBACK_ACTIVE = False
+_fallback_recorded = False
+
+
+def _record_fallback(reason: str) -> None:
+    """The fallback label must reach the manifest, not just per-record meta."""
+    global FALLBACK_ACTIVE, _fallback_recorded
+    FALLBACK_ACTIVE = True
+    if not _fallback_recorded:
+        from common import update_manifest
+
+        update_manifest(
+            deviation=f"compress_llmlingua fallback (sentence pruning, NOT LLMLingua): {reason}"
+        )
+        _fallback_recorded = True
 
 
 def _get_compressor():
-    global _compressor, FALLBACK_ACTIVE
+    global _compressor
     if _compressor is not None or FALLBACK_ACTIVE:
         return _compressor
     try:
@@ -43,7 +57,7 @@ def _get_compressor():
         print(f"  [compress] LLMLingua-2 loaded on {device}")
     except Exception as e:
         print(f"  [compress] LLMLingua unavailable ({e!r}) — FALLBACK sentence pruner active")
-        FALLBACK_ACTIVE = True
+        _record_fallback(f"install/load failure: {type(e).__name__}")
     return _compressor
 
 
@@ -77,17 +91,25 @@ def compress_llmlingua(question, candidates, budget, **ctx):
 
     t0 = time.time()
     comp = _get_compressor()
+    text = None
     if comp is not None:
-        # rate is advisory in llmlingua-2; enforce the real budget afterwards
-        res = comp.compress_prompt(
-            [c.text for c in ordered],
-            question=question,
-            target_token=budget,
-            use_sentence_level_filter=False,
-        )
-        text = res["compressed_prompt"]
-        method = f"llmlingua2:{LLMLINGUA_MODEL.split('/')[-1]}"
-    else:
+        try:
+            # NOTE: LLMLingua-2's compressor is question-AGNOSTIC — verified in
+            # llmlingua 0.2.2, compress_prompt_llmlingua2 accepts no question.
+            # target_token is measured in the compressor's own tokenizer and is
+            # advisory; the real (Qwen) budget is enforced below.
+            res = comp.compress_prompt(
+                [c.text for c in ordered],
+                target_token=budget,
+                use_sentence_level_filter=False,
+            )
+            text = res["compressed_prompt"]
+            method = f"llmlingua2:{LLMLINGUA_MODEL.split('/')[-1]} (question-agnostic)"
+        except Exception as e:  # runtime failure (e.g. MPS OOM), not just load
+            print(f"  [compress] LLMLingua runtime failure ({e!r}) — fallback for this call")
+            _record_fallback(f"llmlingua runtime failure: {type(e).__name__}")
+            text = None
+    if text is None:
         text = _fallback_sentence_prune(question, joined, budget)
         method = "FALLBACK_sentence_prune (reimplementation, NOT LLMLingua)"
     latency = time.time() - t0

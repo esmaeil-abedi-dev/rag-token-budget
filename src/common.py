@@ -26,10 +26,9 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 OUTPUTS = ROOT / "outputs"
 LLM_CACHE = ROOT / "llm_cache"
-EMB_CACHE = ROOT / "llm_cache" / "embeddings"
 MANIFEST_PATH = DATA / "manifest.json"
 
-for _d in (DATA, OUTPUTS, LLM_CACHE, EMB_CACHE):
+for _d in (DATA, OUTPUTS, LLM_CACHE):
     _d.mkdir(exist_ok=True, parents=True)
 
 load_dotenv(ROOT / ".env")
@@ -73,11 +72,17 @@ def n_tokens(text: str) -> int:
 
 
 def truncate_to_tokens(text: str, max_tokens: int) -> str:
+    """Truncate so the decoded text RE-ENCODES to <= max_tokens (decode of a
+    token slice is not guaranteed round-trip stable at BPE boundaries)."""
     tok = get_tokenizer()
     ids = tok.encode(text, add_special_tokens=False)
     if len(ids) <= max_tokens:
         return text
-    return tok.decode(ids[:max_tokens])
+    out = tok.decode(ids[:max_tokens])
+    while max_tokens > 0 and len(tok.encode(out, add_special_tokens=False)) > max_tokens:
+        max_tokens -= 1
+        out = tok.decode(ids[:max_tokens])
+    return out
 
 
 # ---------------------------------------------------------------- manifest
@@ -101,6 +106,12 @@ def update_manifest(**kwargs) -> dict:
         if k == "deviation":  # append, never overwrite
             if v not in manifest["deviations"]:
                 manifest["deviations"].append(v)
+        elif k == "resolve_deviation_prefix":
+            # a stage re-ran clean: retire its stale deviations (history stays
+            # in EXPERIMENT_LOG.md, which is append-only)
+            manifest["deviations"] = [
+                d for d in manifest["deviations"] if not d.startswith(v)
+            ]
         else:
             manifest[k] = v
     manifest["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -211,7 +222,12 @@ def llm_generate(
     the same deployment; other models (judge) route normally.
     """
     model = model or GENERATOR_MODEL
-    params = {"temperature": temperature, "max_tokens": max_tokens, "system": system}
+    # provider pin and endpoint are result-affecting routing params: changing
+    # either must invalidate the cache, or stale completions from the old
+    # deployment would silently masquerade as the new one
+    provider = GENERATOR_PROVIDER if model == GENERATOR_MODEL else None
+    params = {"temperature": temperature, "max_tokens": max_tokens, "system": system,
+              "provider": provider, "base_url": OPENROUTER_BASE_URL}
     key = _cache_key({"prompt": prompt, "model": model, "params": params})
     hit = cache_get_json("llm", key)
     if hit is not None:
@@ -262,8 +278,14 @@ def llm_generate(
                 },
             )
             return result
-        except Exception as e:  # rate limits, transient network
+        except Exception as e:
+            status = getattr(e, "status_code", None)
+            if status in (400, 401, 403, 404, 413, 422):
+                # non-retryable client errors: bad key/model/prompt — fail fast
+                raise RuntimeError(f"LLM call failed (non-retryable {status}): {e!r}") from e
             last_err = e
+            if attempt == max_retries - 1:
+                break  # no pointless sleep after the final failure
             wait = min(2**attempt, 30)
             print(f"  LLM call failed ({e!r}); retry {attempt + 1}/{max_retries} in {wait}s")
             time.sleep(wait)
@@ -282,6 +304,9 @@ def embed_texts(texts: list[str], *, batch_size: int = 64) -> "list[list[float]]
         else:
             missing_idx.append(i)
 
+    if not missing_idx:  # 100% cache hit: no key needed, no network
+        return out
+
     headers = {"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"}
     for start in range(0, len(missing_idx), batch_size):
         batch = missing_idx[start : start + batch_size]
@@ -293,6 +318,10 @@ def embed_texts(texts: list[str], *, batch_size: int = 64) -> "list[list[float]]
                 )
                 r.raise_for_status()
                 data = r.json()["data"]
+                if len(data) != len(batch):
+                    raise RuntimeError(
+                        f"embeddings API returned {len(data)} vectors for {len(batch)} inputs"
+                    )
                 break
             except Exception as e:
                 if attempt == 5:
@@ -308,15 +337,18 @@ def embed_texts(texts: list[str], *, batch_size: int = 64) -> "list[list[float]]
     return out
 
 
-def rerank(query: str, documents: list[str], *, top_n: int | None = None) -> list[tuple[int, float]]:
+def rerank(query: str, documents: list[str], *, top_n: int | None = None
+           ) -> tuple[list[tuple[int, float]], bool]:
     """Rerank via OpenRouter's Cohere-compatible endpoint, disk-cached.
 
-    Returns [(index_into_documents, relevance_score)] sorted descending.
+    Returns ([(index_into_documents, relevance_score)] sorted descending,
+    cached: bool) — callers use `cached` so per-search cost is charged once,
+    not once per (arm, budget) reuse.
     """
     k = _cache_key({"rerank": query, "docs": documents, "model": RERANK_MODEL, "top_n": top_n})
     hit = cache_get_json("llm", f"rerank_{k}")
     if hit is not None:
-        return [tuple(x) for x in hit]
+        return [tuple(x) for x in hit], True
 
     headers = {"Authorization": f"Bearer {_api_key()}", "Content-Type": "application/json"}
     payload = {"model": RERANK_MODEL, "query": query, "documents": documents}
@@ -340,7 +372,7 @@ def rerank(query: str, documents: list[str], *, top_n: int | None = None) -> lis
         key=lambda x: -x[1],
     )
     cache_put_json("llm", f"rerank_{k}", ranked)
-    return ranked
+    return ranked, False
 
 
 # ---------------------------------------------------------------- chunks

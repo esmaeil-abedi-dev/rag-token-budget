@@ -79,7 +79,11 @@ _JSON_RX = re.compile(r"\{[^{}]*\}")
 def judge_scores(question: str, context: str, answer: str, *, client=None) -> dict:
     """One fixed-judge call (cached like every other paid call). The judge model
     and this exact prompt are pinned in the manifest — never varied mid-run."""
-    ctx = context if len(context) < 24000 else context[:24000]  # char guard only
+    # Guard sized so full_context (~12.8k tokens ≈ 55k chars) is judged WHOLE —
+    # truncating it would bias faithfulness against exactly the "does more
+    # context hurt" comparison. 200k chars ≈ 50k tokens, well inside the
+    # judge's 128k window.
+    ctx = context if len(context) < 200_000 else context[:200_000]
     res = llm_generate(
         JUDGE_PROMPT.format(question=question, context=ctx or "(no context)", answer=answer),
         model=JUDGE_MODEL, system=JUDGE_SYSTEM, max_tokens=60, temperature=0.0,

@@ -92,11 +92,19 @@ def main():
     ap.add_argument("--sweep", choices=["primary", "structured", "both"], default="both")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--skip-sensitivity", action="store_true")
-    args = ap.parse_args()
+    ap.add_argument("--tier1-only", action="store_true",
+                    help="run only Tier 1 datasets (hotpotqa, multihop_rag, squad_v2) "
+                         "as a complete first pass")
+    args, _ = ap.parse_known_args()
 
     sweeps = ["primary", "structured"] if args.sweep == "both" else [args.sweep]
     q_primary = load_questions("primary")
     q_structured = load_questions("structured")
+    if args.tier1_only:
+        tier1 = {"hotpotqa", "multihop_rag", "squad_v2"}
+        q_primary = [q for q in q_primary if q["dataset"] in tier1]
+        q_structured = []
+        print(f"[05] --tier1-only: {len(q_primary)} primary questions, structured deferred")
     if args.limit:
         q_primary, q_structured = q_primary[: args.limit], q_structured[: args.limit]
 
@@ -124,6 +132,16 @@ def main():
             "nq_open_gold": 1, "ms_marco": 1, "liverag": 2, "wikitablequestions": 0}
     q_primary.sort(key=lambda q: tier.get(q["dataset"], 3))
 
+    def uncached_cost(df: pd.DataFrame) -> float:
+        """This-run spend: cached generations/judgements replay their catalog
+        cost_usd but cost nothing now — count only uncached rows."""
+        gen = df.loc[~df["gen_cached"].astype(bool), "cost_gen_usd"].sum()
+        judge = 0.0
+        if "judge_cached" in df:
+            judge = df.loc[~df["judge_cached"].astype(bool), "judge_cost_usd"].sum()
+        asm = df["cost_assembly_usd"].sum()  # arms already zero cached reuses
+        return float(gen + judge + asm)
+
     for sweep, questions in (("primary", q_primary), ("structured", q_structured)):
         if sweep not in sweeps or not questions:
             continue
@@ -132,48 +150,56 @@ def main():
                 t0 = time.time()
                 df = run_block(questions, sweep=sweep, arm=arm, budget=budget,
                                ctx=ctx, workers=args.workers, force=args.force)
-                block_cost = float(df.get("cost_gen_usd", pd.Series(dtype=float)).sum()
-                                   + df.get("judge_cost_usd", pd.Series(dtype=float)).sum()
-                                   + df.get("cost_assembly_usd", pd.Series(dtype=float)).sum())
+                block_cost = uncached_cost(df)
                 spent += block_cost
                 frames.append(df)
                 print(f"[05] {sweep:10s} {arm:22s} b={budget:5d}  n={len(df)}  "
                       f"EM={df['em'].mean():.3f} F1={df['f1'].mean():.3f}  "
                       f"${block_cost:.3f}  {time.time()-t0:.0f}s  (total ${spent:.2f})")
 
-    # graph sensitivity: hops=1 at the 1000 budget (the brief's hyperparameter run)
-    if not args.skip_sensitivity and "primary" in sweeps:
-        from arms import graph as graph_mod
+    # graph sensitivity: hops=1 at the 1000 budget (the brief's hyperparameter
+    # run). Distinct arm_label + arm_kwargs give it its own assembly-cache keys
+    # — it can NEVER silently reuse the hops=2 contexts.
+    if not args.skip_sensitivity and "primary" in sweeps and q_primary:
+        df = run_block(q_primary, sweep="sensitivity_h1", arm="graph_select",
+                       budget=1000, ctx=ctx, workers=args.workers, force=args.force,
+                       arm_label="graph_select_h1", arm_kwargs={"hops": 1})
+        spent += uncached_cost(df)
+        frames.append(df)
+        print(f"[05] sensitivity graph hops=1 b=1000 n={len(df)} EM={df['em'].mean():.3f}")
 
-        orig = graph_mod.graph_select
-
-        def h1(question, candidates, budget, **kw):
-            kw["hops"] = 1
-            return orig(question, candidates, budget, **kw)
-
-        graph_mod.graph_select = h1
-        import arms as arms_pkg
-        # bypass the registry cache by calling run_block with a distinct label
-        try:
-            df = run_block(q_primary, sweep="sensitivity_h1", arm="graph_select",
-                           budget=1000, ctx=ctx, workers=args.workers, force=args.force)
-            df["arm"] = "graph_select_h1"
-            frames.append(df)
-            print(f"[05] sensitivity graph hops=1 b=1000 n={len(df)} EM={df['em'].mean():.3f}")
-        finally:
-            graph_mod.graph_select = orig
-
-    all_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    # Rebuild eval_records from ALL checkpoints on disk, not just this
+    # invocation's frames — a later `--sweep structured` run must never clobber
+    # the primary sweep out of the file.
+    ckpts = sorted(PARTIAL_DIR.glob("*.parquet"))
+    all_df = (pd.concat([pd.read_parquet(p) for p in ckpts], ignore_index=True)
+              if ckpts else pd.DataFrame())
     if len(all_df):
         all_df.to_parquet(EVAL_RECORDS, index=False)
+        print(f"[05] eval_records rebuilt from {len(ckpts)} checkpoints: {len(all_df)} records")
 
-    # judge spot-check sample (Synopsis promises ~50 hand-verified judgements)
+    # judge spot-check sample (Synopsis promises ~50 hand-verified judgements
+    # with a reported agreement rate). Includes the judged context so a human
+    # CAN verify, plus empty columns for the human verdict; 08_summary computes
+    # the agreement rate once they are filled in.
     if len(all_df):
+        from common import cache_get_json
+
         rng = np.random.default_rng(SEED)
-        judged = all_df[all_df["judge_parse_ok"] == True]  # noqa: E712
-        sample = judged.iloc[rng.permutation(len(judged))[:50]]
-        sample[["question_id", "sweep", "arm", "budget", "predicted_answer",
-                "gold_answer", "em", "f1", "faithfulness", "answer_relevance"]].to_csv(
+        judged = all_df[(all_df["judge_parse_ok"] == True)  # noqa: E712
+                        & all_df["sweep"].isin(["primary", "structured"])]
+        sample = judged.iloc[rng.permutation(len(judged))[:50]].copy()
+
+        def ctx_snippet(row):
+            a = cache_get_json("assembled", f"{row['arm']}_{row['budget']}_{row['question_id']}")
+            return (a or {}).get("text", "")[:2000]
+
+        sample["context_snippet"] = sample.apply(ctx_snippet, axis=1)
+        sample["human_faithfulness"] = ""  # to be filled by hand
+        sample["human_agrees"] = ""        # yes/no, to be filled by hand
+        sample[["question_id", "sweep", "arm", "budget", "context_snippet",
+                "predicted_answer", "gold_answer", "em", "f1", "faithfulness",
+                "answer_relevance", "human_faithfulness", "human_agrees"]].to_csv(
             OUTPUTS / "judge_spot_check_sample.csv", index=False)
 
     elapsed = (time.time() - t_start) / 60
@@ -183,9 +209,18 @@ def main():
         pivot = all_df.pivot_table(index="arm", columns="budget", values="em", aggfunc="mean").round(3)
         summary += f"\nEM by arm x budget:\n{pivot.to_string()}"
     print(summary)
-    update_manifest(stage05=dict(n_records=int(len(all_df)), spend_usd=round(spent, 2),
+    from runner import GEN_SYSTEM, GEN_SYSTEM_NO_CONTEXT
+    from metrics import JUDGE_PROMPT, JUDGE_SYSTEM
+
+    update_manifest(stage05=dict(n_records=int(len(all_df)),
+                                 uncached_spend_this_run_usd=round(spent, 2),
                                  limit=args.limit, sweeps=sweeps,
-                                 gen_max_tokens=GEN_MAX_TOKENS))
+                                 gen_max_tokens=GEN_MAX_TOKENS),
+                    # the pinned prompts are control variables — record them
+                    generation_system_prompt=GEN_SYSTEM,
+                    generation_system_prompt_no_context=GEN_SYSTEM_NO_CONTEXT,
+                    judge_system_prompt=JUDGE_SYSTEM,
+                    judge_prompt_template=JUDGE_PROMPT)
     append_log(f"Stage 05 sweep ({'+'.join(sweeps)}, limit={args.limit})",
                f"```\n{summary}\n```")
 

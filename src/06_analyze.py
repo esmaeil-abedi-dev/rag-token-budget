@@ -78,15 +78,24 @@ def two_prop(m: pd.DataFrame) -> dict:
 
 
 def bh_adjust(rows: list[dict]) -> None:
-    """BH-FDR within each (rq, test) family, in place."""
+    """BH-FDR within each (rq, test) family, in place. NaN p-values (degenerate
+    cells) are excluded from the family — one NaN must not erase every p_adj —
+    and flagged instead."""
     from statsmodels.stats.multitest import multipletests
 
     df = pd.DataFrame(rows)
     for _, g in df.groupby(["rq", "test"]):
-        adj = multipletests(g["p_raw"], method="fdr_bh")[1]
-        for i, (ridx, _) in enumerate(g.iterrows()):
+        valid = g[g["p_raw"].notna()]
+        for ridx in g.index[g["p_raw"].isna()]:
+            rows[ridx]["p_adj"] = None
+            rows[ridx]["note"] = (rows[ridx].get("note", "") +
+                                  " | p undefined (degenerate cell), excluded from FDR family")
+        if not len(valid):
+            continue
+        adj = multipletests(valid["p_raw"], method="fdr_bh")[1]
+        for i, (ridx, _) in enumerate(valid.iterrows()):
             rows[ridx]["p_adj"] = float(adj[i])
-            rows[ridx]["family_size"] = len(g)
+            rows[ridx]["family_size"] = len(valid)
 
 
 def results_table(df: pd.DataFrame) -> pd.DataFrame:
@@ -114,11 +123,33 @@ def results_table(df: pd.DataFrame) -> pd.DataFrame:
                                             + gg["latency_assembly_s"]).mean()), 3),
             )
             if hop == "all":
+                # APT unit is EM per 1,000 input tokens — stated in the column
+                # name so nobody misreads the prereg definition's raw ratio
                 row.update(em_ci_lo=round(em_lo, 4), em_ci_hi=round(em_hi, 4),
                            f1_ci_lo=round(f1_lo, 4), f1_ci_hi=round(f1_hi, 4),
-                           apt_generator=round(row["em"] / max(row["mean_gen_input_tokens"], 1) * 1000, 4),
-                           apt_total=round(row["em"] / max(row["mean_total_tokens"], 1) * 1000, 4))
+                           apt_generator_per_1k=round(
+                               row["em"] / max(row["mean_gen_input_tokens"], 1) * 1000, 4),
+                           apt_total_per_1k=round(
+                               row["em"] / max(row["mean_total_tokens"], 1) * 1000, 4))
             out.append(row)
+    return pd.DataFrame(out)
+
+
+def results_by_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    """Per-dataset slice with bootstrap CIs — EXPLORATORY (~75-150 questions per
+    dataset is underpowered; significance claims attach only to pooled results,
+    per the prereg)."""
+    out = []
+    for (sweep, dataset, arm, budget), g in df.groupby(["sweep", "dataset", "arm", "budget"]):
+        g = g.sort_values("question_id")
+        idx = RNG.integers(0, len(g), size=(N_BOOT, len(g)))
+        em_lo, em_hi = boot_ci(g["em"].to_numpy().astype(float), idx)
+        out.append(dict(sweep=sweep, dataset=dataset, arm=arm, budget=budget, n=len(g),
+                        em=round(g["em"].mean(), 4),
+                        em_ci_lo=round(em_lo, 4), em_ci_hi=round(em_hi, 4),
+                        f1=round(g["f1"].mean(), 4),
+                        faithfulness=round(g["faithfulness"].mean(), 4),
+                        label="exploratory (underpowered slice)"))
     return pd.DataFrame(out)
 
 
@@ -172,9 +203,8 @@ def fig_accuracy_by_budget(res: pd.DataFrame):
         g = sub[sub.arm == arm].sort_values("budget")
         if not len(g):
             continue
-        ax.errorbar(g["budget"], g["em"],
-                    yerr=[g["em"] - g["em_ci_lo"], g["em_ci_hi"] - g["em"]],
-                    marker="o", capsize=4, label=arm)
+        yerr = np.clip([g["em"] - g["em_ci_lo"], g["em_ci_hi"] - g["em"]], 0, None)
+        ax.errorbar(g["budget"], g["em"], yerr=yerr, marker="o", capsize=4, label=arm)
     ax.set_xscale("log"); ax.set_xticks(BUDGETS); ax.set_xticklabels(BUDGETS)
     ax.set_xlabel("token budget"); ax.set_ylabel("Exact match (95% bootstrap CI)")
     ax.set_title("Accuracy vs token budget — primary sweep (n=600, paired bootstrap)")
@@ -216,6 +246,7 @@ def fig_by_dataset(df: pd.DataFrame):
                 ax.plot(g["budget"], g["em"], marker="o", label=arm)
         ax.set_xscale("log"); ax.set_xticks(BUDGETS); ax.set_xticklabels(BUDGETS)
         ax.set_title(f"{ds} (n={sub.question_id.nunique()}, descriptive)")
+        ax.set_xlabel("token budget"); ax.set_ylabel("Exact match")
         ax.grid(alpha=0.3)
     for ax in axes.flat[len(datasets):]:
         ax.axis("off")
@@ -291,6 +322,16 @@ def run_tests(df: pd.DataFrame) -> list[dict]:
                          n_discordant_c=d.get("c"), primary_comparison=primary,
                          note=note))
 
+    def discordant_odds(mc: dict) -> float:
+        """Haldane-corrected b/c odds: finite for c=0, and 0/0 is not 'infinite'."""
+        if mc["b"] == 0 and mc["c"] == 0:
+            return float("nan")
+        return (mc["b"] + 0.5) / (mc["c"] + 0.5)
+
+    WINNERS_CURSE = ("best arm selected on the same data it is tested on "
+                     "(max-selection); nominal p is anti-conservative — "
+                     "flagged per review, reported as prereg'd")
+
     # RQ1: best Synopsis arm vs naive, per budget
     for budget in BUDGETS:
         by_em = (prim[(prim.budget == budget) & (prim.arm.isin(SYNOPSIS_ARMS))]
@@ -300,11 +341,11 @@ def run_tests(df: pd.DataFrame) -> list[dict]:
         tp = two_prop(m)
         add("RQ1", f"{best} vs naive_topk", "two_proportion_z", budget, tp,
             "cohens_h", tp["h"], (tp["h_ci_lo"], tp["h_ci_hi"]),
-            primary=(budget == PRIMARY_BUDGET))
+            primary=(budget == PRIMARY_BUDGET), note=WINNERS_CURSE)
         mc = mcnemar_exact(m)
         add("RQ1", f"{best} vs naive_topk", "mcnemar_exact", budget, mc,
-            "discordant_odds", (mc["b"] / mc["c"]) if mc["c"] else np.inf,
-            n=len(m), primary=(budget == PRIMARY_BUDGET))
+            "discordant_odds_haldane", discordant_odds(mc),
+            n=len(m), primary=(budget == PRIMARY_BUDGET), note=WINNERS_CURSE)
 
     # RQ3: graph vs naive AND graph vs naive_dedup (the confound), per budget
     for other in ["naive_topk", "naive_topk_dedup", "rerank_topk"]:
@@ -318,36 +359,74 @@ def run_tests(df: pd.DataFrame) -> list[dict]:
                 primary=(budget == PRIMARY_BUDGET and other == "naive_topk"))
             mc = mcnemar_exact(m)
             add("RQ3", f"graph_select vs {other}", "mcnemar_exact", budget, mc,
-                "discordant_odds", (mc["b"] / mc["c"]) if mc["c"] else np.inf,
+                "discordant_odds_haldane", discordant_odds(mc),
                 n=len(m), primary=(budget == PRIMARY_BUDGET and other == "naive_topk"))
 
-    # RQ2: budget slope, single vs multi (per-question F1 slope across budgets)
+    # Sensitivity disclosure: graph hops=1 vs hops=2 at the 1000 budget
+    sens = df[df.sweep == "sensitivity_h1"]
+    if len(sens):
+        both = prim[(prim.arm == "graph_select") & (prim.budget == PRIMARY_BUDGET)][
+            ["question_id", "em", "f1"]].merge(
+            sens[["question_id", "em", "f1"]], on="question_id", suffixes=("_a", "_b"))
+        if len(both):
+            mc = mcnemar_exact(both)
+            add("SENSITIVITY", "graph_select hops=2 vs hops=1", "mcnemar_exact",
+                PRIMARY_BUDGET, mc, "discordant_odds_haldane", discordant_odds(mc),
+                n=len(both),
+                note="pre-registered hyperparameter sensitivity run, disclosed not tested")
+
+    # RQ2: budget slope, single vs multi. UNIT OF ANALYSIS = THE QUESTION
+    # (review round 1: per-(question x arm) slopes are 5x pseudo-replicated).
+    # Per question: mean F1 across the 5 Synopsis arms at each budget, then the
+    # least-squares slope over log2(budget).
     slopes = {}
     for hop, g in prim[prim.arm.isin(SYNOPSIS_ARMS)].groupby("hop_type"):
-        per_q = g.pivot_table(index=["question_id", "arm"], columns="budget", values="f1")
+        per_q = g.pivot_table(index="question_id", columns="budget", values="f1",
+                              aggfunc="mean")  # mean over arms -> one row/question
         per_q = per_q.dropna()
+        if not len(per_q):
+            continue
         x = np.log2(np.array(BUDGETS, dtype=float))
         y = per_q[BUDGETS].to_numpy()
         s = ((y - y.mean(axis=1, keepdims=True)) @ (x - x.mean())) / ((x - x.mean()) ** 2).sum()
         slopes[hop] = s
         t, p = sps.ttest_rel(per_q[4000], per_q[500])
-        add("RQ2", f"{hop}: F1@4000 vs F1@500 (paired)", "paired_t", "500vs4000",
+        diffs = (per_q[4000] - per_q[500]).to_numpy()
+        idx = RNG.integers(0, len(diffs), size=(2000, len(diffs)))
+        ci = (float(np.percentile(diffs[idx].mean(axis=1), 2.5)),
+              float(np.percentile(diffs[idx].mean(axis=1), 97.5)))
+        add("RQ2", f"{hop}: mean-arm F1@4000 vs F1@500 (paired by question)",
+            "paired_t", "500vs4000",
             dict(statistic=float(t), p=float(p)), "mean_diff",
-            float((per_q[4000] - per_q[500]).mean()), n=len(per_q))
+            float(diffs.mean()), ci=ci, n=len(per_q))
     if "multi" in slopes and "single" in slopes:
-        t, p = sps.ttest_ind(slopes["multi"], slopes["single"], equal_var=False)
-        d_eff = ((slopes["multi"].mean() - slopes["single"].mean())
-                 / np.sqrt((slopes["multi"].var() + slopes["single"].var()) / 2))
-        add("RQ2", "F1-per-log2(budget) slope: multi vs single", "welch_t", "slope",
-            dict(statistic=float(t), p=float(p)), "cohens_d", float(d_eff),
-            n=len(slopes["multi"]) + len(slopes["single"]), primary=True)
+        sm, ss = slopes["multi"], slopes["single"]
+        t, p = sps.ttest_ind(sm, ss, equal_var=False)
+        sp = np.sqrt(((len(sm) - 1) * sm.var(ddof=1) + (len(ss) - 1) * ss.var(ddof=1))
+                     / (len(sm) + len(ss) - 2))
+        d_eff = (sm.mean() - ss.mean()) / sp if sp > 0 else float("nan")
+        boot_d = []
+        for _ in range(2000):
+            bm = sm[RNG.integers(0, len(sm), len(sm))]
+            bs = ss[RNG.integers(0, len(ss), len(ss))]
+            bsp = np.sqrt(((len(bm) - 1) * bm.var(ddof=1) + (len(bs) - 1) * bs.var(ddof=1))
+                          / (len(bm) + len(bs) - 2))
+            boot_d.append((bm.mean() - bs.mean()) / bsp if bsp > 0 else np.nan)
+        ci = (float(np.nanpercentile(boot_d, 2.5)), float(np.nanpercentile(boot_d, 97.5)))
+        add("RQ2", "per-question F1-per-log2(budget) slope: multi vs single",
+            "welch_t", "slope",
+            dict(statistic=float(t), p=float(p)), "cohens_d", float(d_eff), ci=ci,
+            n=len(sm) + len(ss), primary=True)
     else:
         print(f"  [06] RQ2 slope contrast skipped: hop types present = {sorted(slopes)}")
 
-    # RQ4: structured sweep vs prose primary, per arm (unpaired — different
-    # questions — so pre-registered two-proportion only; noted)
-    struct = df[df.sweep == "structured"]
-    prose = prim[prim.content_type == "prose"]
+    # RQ4: structured sweep vs prose primary, per arm, AT THE PRIMARY BUDGET
+    # (each question contributes exactly one record: pooling budgets would stack
+    # 4 correlated records per question into a test that assumes independence).
+    # Unpaired by design (different question sets) -> two-proportion only; the
+    # dataset-vs-content-type confound is disclosed in the note.
+    struct = df[(df.sweep == "structured") & (df.budget == PRIMARY_BUDGET)]
+    prose = prim[(prim.content_type == "prose") & (prim.budget == PRIMARY_BUDGET)]
     for arm in SYNOPSIS_ARMS:
         a = struct[struct.arm == arm]["em"]
         b = prose[prose.arm == arm]["em"]
@@ -355,12 +434,22 @@ def run_tests(df: pd.DataFrame) -> list[dict]:
             continue
         from statsmodels.stats.proportion import proportions_ztest
 
-        stat, p = proportions_ztest([int(a.sum()), int(b.sum())], [len(a), len(b)])
+        with np.errstate(invalid="ignore"):
+            stat, p = proportions_ztest([int(a.sum()), int(b.sum())], [len(a), len(b)])
         h = cohens_h(a.mean(), b.mean())
-        add("RQ4", f"{arm}: structured vs prose", "two_proportion_z", "pooled",
-            dict(statistic=float(stat), p=float(p)), "cohens_h", float(h),
+        av, bv = a.to_numpy().astype(float), b.to_numpy().astype(float)
+        boot_h = [cohens_h(av[RNG.integers(0, len(av), len(av))].mean(),
+                           bv[RNG.integers(0, len(bv), len(bv))].mean())
+                  for _ in range(2000)]
+        ci = (float(np.percentile(boot_h, 2.5)), float(np.percentile(boot_h, 97.5)))
+        add("RQ4", f"{arm}: structured vs prose @ {PRIMARY_BUDGET}", "two_proportion_z",
+            PRIMARY_BUDGET,
+            dict(statistic=float(stat) if np.isfinite(stat) else None,
+                 p=float(p) if np.isfinite(p) else float("nan")),
+            "cohens_h", float(h), ci=ci,
             n=len(a) + len(b), primary=(arm == "graph_select"),
-            note="unpaired (different question sets) — McNemar not applicable")
+            note="unpaired (different question sets); content type confounded with "
+                 "dataset (WTQ vs prose benchmarks) — disclosed; McNemar not applicable")
 
     bh_adjust(rows)
     return rows
@@ -385,7 +474,9 @@ def confound_checks(df: pd.DataFrame) -> pd.DataFrame:
 
 def main():
     df = pd.read_parquet(DATA / "eval_records.parquet")
-    df = df[df.sweep.isin(["primary", "structured"])]
+    # sensitivity_h1 stays in: its rows appear in preliminary_results and the
+    # SENSITIVITY test row — the pre-registered disclosure must surface
+    df = df[df.sweep.isin(["primary", "structured", "sensitivity_h1"])]
     print(f"[06] {len(df)} records")
 
     res = results_table(df)
@@ -394,6 +485,7 @@ def main():
         bdf = pd.read_parquet(base)
         res = pd.concat([res, results_table(bdf)], ignore_index=True)
     res.to_csv(OUTPUTS / "preliminary_results.csv", index=False)
+    results_by_dataset(df).to_csv(OUTPUTS / "preliminary_results_by_dataset.csv", index=False)
 
     fig_pareto(res)
     fig_accuracy_by_budget(res)

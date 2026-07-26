@@ -22,7 +22,7 @@ RERANK_COST_PER_SEARCH_USD = 0.002  # cohere rerank list price, recorded in the 
 
 def rerank_topk(question, candidates, budget, **ctx):
     t0 = time.time()
-    ranked = rerank(question, [c.text for c in candidates])
+    ranked, cached = rerank(question, [c.text for c in candidates])
     latency = time.time() - t0
     ordered = [candidates[i] for i, _score in ranked]
     text, ids = greedy_fill(ordered, budget)
@@ -31,6 +31,8 @@ def rerank_topk(question, candidates, budget, **ctx):
         "rerank_topk", text, ids, budget,
         assembly_input_tokens=assembly_in,
         assembly_latency_s=round(latency, 3),
-        assembly_cost_usd=RERANK_COST_PER_SEARCH_USD,
-        meta={"n_candidates": len(candidates)},
+        # per-search price is paid once per question, not once per budget:
+        # cached reuses cost $0
+        assembly_cost_usd=0.0 if cached else RERANK_COST_PER_SEARCH_USD,
+        meta={"n_candidates": len(candidates), "rerank_cached": cached},
     )

@@ -9,8 +9,11 @@ QM 640 Interim Report template-1.docx
 .env
 
 # --- data & caches (outputs/ IS committed — the report cites it) ---
-data/
+# data/* (not data/) so the negation below can re-include the small sample:
+# git never descends into a fully-excluded directory
+data/*
 !data/sample/
+!data/sample/**
 .cache/
 llm_cache/
 *.parquet

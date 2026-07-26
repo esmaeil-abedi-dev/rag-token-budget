@@ -18,15 +18,21 @@ python-dotenv>=1.0
 transformers>=4.51
 huggingface_hub>=0.23
 
-# Compression arm (LLMLingua-2); documented fallback in arms/ if install fails
+# Compression arm (LLMLingua-2); documented fallback in arms/compress.py.
+# torch is a transitive dep of llmlingua but arms/compress.py imports it
+# directly, so it is declared explicitly.
 llmlingua>=0.2.2
+torch>=2.0
 
-# Graph arm NER (fallback: regex noun-phrase extractor in arms/graph_select.py)
+# Graph arm NER (spaCy model en_core_web_sm auto-downloads on first run of
+# src/04_arms.py — a one-time ~12MB network fetch; regex fallback in
+# src/04_arms.py if spaCy is unavailable)
 spacy>=3.7
 
 # Analysis
 matplotlib>=3.8
 scipy>=1.13
 statsmodels>=0.14
-tqdm>=4.66
 requests>=2.31
+
+# Exact versions used for the recorded runs: requirements.lock.txt

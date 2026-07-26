@@ -60,12 +60,14 @@ class RetrievalContext:
         """Top-k chunks by exact cosine; each Chunk carries its similarity score."""
         qv = self.query_vec(question_id)
         sims = self.emb @ qv
-        top = np.argpartition(-sims, k)[:k]
-        top = top[np.argsort(-sims[top])]
+        k = min(k, len(sims))
+        top = np.argpartition(-sims, k - 1)[:k] if k < len(sims) else np.arange(len(sims))
+        top = top[np.argsort(-sims[top], kind="stable")]
         out = []
         for j in top:
             c = self._chunks[self.chunk_ids[j]]
-            out.append(Chunk(**{**c.__dict__, "score": float(sims[j])}))
+            fields = {**c.__dict__, "score": float(sims[j]), "extra": dict(c.extra)}
+            out.append(Chunk(**fields))
         return out
 
     def arm_ctx(self, question_id: str) -> dict:

@@ -70,9 +70,14 @@ def summarize_recomp(question, candidates, budget, **ctx):
         text = truncate_to_tokens(text, budget)
         truncated = True
     latency = time.time() - t0
+    # Honest APT_total accounting (matches the brief's definition): RECOMP reads
+    # the WHOLE candidate pool in its extractive pass, then feeds the extract to
+    # its summarizer LLM — both are assembly input. Charging only the LLM call
+    # would hand RECOMP a ~4x bookkeeping advantage over rerank/LLMLingua.
+    pool_tokens = sum(c.n_tokens for c in candidates) + n_tokens(question)
     return finalize(
         "summarize_recomp", text, [c.chunk_id for c in candidates], budget,
-        assembly_input_tokens=res.input_tokens,
+        assembly_input_tokens=pool_tokens + res.input_tokens,
         assembly_output_tokens=res.output_tokens,
         assembly_latency_s=round(latency, 3),
         assembly_cost_usd=res.cost_usd,

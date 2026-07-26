@@ -60,8 +60,12 @@ def finalize(arm: str, text: str, chunk_ids: list[str], budget: int, **kw) -> As
     assert real <= budget, (
         f"BUDGET VIOLATION in {arm}: {real} tokens > budget {budget} — refusing to continue"
     )
-    return AssembledContext(arm=arm, text=text, chunk_ids=chunk_ids,
-                            gen_context_tokens=real, **kw)
+    result = AssembledContext(arm=arm, text=text, chunk_ids=chunk_ids,
+                              gen_context_tokens=real, **kw)
+    if not text.strip():  # pathological but silent otherwise — flag it
+        result.meta["empty_context"] = True
+        print(f"  WARNING: {arm} produced an EMPTY context at budget {budget}")
+    return result
 
 
 def get_arm(name: str):

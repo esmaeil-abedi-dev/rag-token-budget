@@ -96,7 +96,12 @@ def norm_key(text: str) -> str:
     return re.sub(r"\W+", " ", text.lower()).strip()
 
 
-STRUCT_RX = re.compile(r"(\|.+\|.+\n.*\|)|(```)|(^\s*[-*•]\s+.+\n\s*[-*•]\s+)", re.M)
+# Markdown tables, code fences, or a genuine bullet LIST (>=3 bullet lines —
+# two lines starting with a dash are routinely just prose/transcripts and
+# produced an ~8% false-positive rate on LiveRAG in review round 1)
+STRUCT_RX = re.compile(
+    r"(\|.+\|.+\n.*\|)|(```)|(^\s*[-*•]\s+.+\n\s*[-*•]\s+.+\n\s*[-*•]\s+)", re.M
+)
 
 
 def looks_structured(text: str) -> bool:
@@ -212,25 +217,90 @@ def main():
         n0, len(pf),
     )
 
-    # ---- Q2: gold evidence must exist in the cleaned corpus
-    by_ds: dict[str, pd.DataFrame] = {d: g for d, g in pf.groupby("dataset")}
+    # ---- C1: chunk to fixed token length with the generator tokenizer.
+    # Runs BEFORE the gold-evidence gate (Q2) so the gate sees what actually
+    # survives into the retrievable corpus — a sub-minimum gold passage that
+    # yields no chunk must fail Q2, not slip past it (review round 1 found two
+    # such unwinnable questions shipped in the primary set).
+    tok = get_tokenizer()
+    chunks = []
+    texts = pf["text"].tolist()
+    encs = tok(texts, add_special_tokens=False)["input_ids"]
+    n_pass = len(pf)
+    n_fffd = 0
+    for (_, row), ids in zip(pf.iterrows(), encs):
+        step = CHUNK_TOKENS - CHUNK_OVERLAP
+        i = 0
+        c = 0
+        while i < len(ids):
+            piece = ids[i : i + CHUNK_TOKENS]
+            # gold passages are exempt from the min-length drop: dropping a
+            # question's only evidence for being short makes it unwinnable
+            if len(piece) >= MIN_CHUNK_TOKENS or (bool(row["is_gold"]) and c == 0):
+                text = tok.decode(piece)
+                if "�" in text:  # token slice split a multi-byte char
+                    text = text.replace("�", "")
+                    n_fffd += 1
+                # store the REAL re-encoded count: decode of a token slice is
+                # not round-trip stable, and budget math must never overrun
+                real_n = len(tok.encode(text, add_special_tokens=False))
+                chunks.append(
+                    dict(
+                        chunk_id=f"{row['passage_id']}_c{c}",
+                        passage_id=row["passage_id"],
+                        dataset=row["dataset"],
+                        title=row["title"],
+                        text=text,
+                        n_tokens=real_n,
+                        content_type=row["content_type"],
+                        is_gold=bool(row["is_gold"]),
+                    )
+                )
+                c += 1
+            if i + CHUNK_TOKENS >= len(ids):
+                break
+            i += step
+    cdf = pd.DataFrame(chunks)
+    log_step(
+        f"Chunking ({CHUNK_TOKENS}-token target, {CHUNK_OVERLAP} overlap)",
+        "text -> chunks",
+        f"generator tokenizer; sub-{MIN_CHUNK_TOKENS}-token tails dropped "
+        f"(gold passages exempt); {n_fffd} boundary-split chars repaired; "
+        f"n_tokens re-encoded for exactness",
+        f"{n_pass} passages -> {len(cdf)} chunks",
+        "Fixed-size chunks make budget arithmetic exact across arms",
+        n_pass, len(cdf),
+    )
+
+    # ---- Q2: gold evidence must exist in the CHUNKED corpus.
+    # Exact/near dedup is global across datasets, so a gold paragraph's
+    # surviving copy may live in another dataset's partition — match same-
+    # dataset first, then fall back to the whole corpus.
+    chunked_pids = set(cdf["passage_id"])
+    pf_chunked = pf[pf["passage_id"].isin(chunked_pids)]
+    keys_by_ds: dict[str, dict] = {
+        d: dict(zip(g["_key"], g["passage_id"])) for d, g in pf_chunked.groupby("dataset")
+    }
+    keys_global = dict(zip(pf_chunked["_key"], pf_chunked["passage_id"]))
 
     def match_gold(row) -> list[str]:
-        """Return passage_ids in the cleaned corpus that carry this question's gold
-        evidence: exact normalized match, or containment for sentence-level facts."""
-        sub = by_ds.get(row["dataset"])
-        if sub is None:
-            return []
+        """passage_ids (with >=1 retrievable chunk) carrying this question's gold
+        evidence: exact normalized match, else containment for sentence facts."""
+        local = keys_by_ds.get(row["dataset"], {})
         pids = []
-        keys = dict(zip(sub["_key"], sub["passage_id"]))
         for gp in row["gold_passages"]:
             k = norm_key(strip_markup(normalize(str(gp))))
             if not k:
                 continue
-            if k in keys:
-                pids.append(keys[k])
+            if k in local:
+                pids.append(local[k])
                 continue
-            hit = next((pid for key_, pid in keys.items() if k in key_), None)
+            if k in keys_global:
+                pids.append(keys_global[k])
+                continue
+            hit = next((pid for key_, pid in local.items() if k in key_), None)
+            if hit is None:
+                hit = next((pid for key_, pid in keys_global.items() if k in key_), None)
             if hit:
                 pids.append(hit)
         return sorted(set(pids))
@@ -245,53 +315,14 @@ def main():
         keep = (n_found > 0) | (n_gold == 0)
         cleaned[name] = df_[keep].reset_index(drop=True)
         log_step(
-            f"Gold evidence absent from corpus ({name})",
+            f"Gold evidence absent from chunked corpus ({name})",
             "gold_passages, gold_passage_ids",
-            "normalized exact/containment match against cleaned corpus",
+            "normalized exact/containment match vs passages with >=1 chunk",
             "Drop question",
             "An arm cannot retrieve evidence the corpus no longer contains",
             n0, len(cleaned[name]),
         )
     qp, qs = cleaned["primary"], cleaned["structured"]
-
-    # ---- C1: chunk to fixed token length with the generator tokenizer
-    tok = get_tokenizer()
-    chunks = []
-    texts = pf["text"].tolist()
-    encs = tok(texts, add_special_tokens=False)["input_ids"]
-    n_pass = len(pf)
-    for (_, row), ids in zip(pf.iterrows(), encs):
-        step = CHUNK_TOKENS - CHUNK_OVERLAP
-        i = 0
-        c = 0
-        while i < len(ids):
-            piece = ids[i : i + CHUNK_TOKENS]
-            if len(piece) >= MIN_CHUNK_TOKENS:
-                chunks.append(
-                    dict(
-                        chunk_id=f"{row['passage_id']}_c{c}",
-                        passage_id=row["passage_id"],
-                        dataset=row["dataset"],
-                        title=row["title"],
-                        text=tok.decode(piece),
-                        n_tokens=len(piece),
-                        content_type=row["content_type"],
-                        is_gold=bool(row["is_gold"]),
-                    )
-                )
-                c += 1
-            if i + CHUNK_TOKENS >= len(ids):
-                break
-            i += step
-    cdf = pd.DataFrame(chunks)
-    log_step(
-        f"Chunking ({CHUNK_TOKENS}-token target, {CHUNK_OVERLAP} overlap)",
-        "text -> chunks",
-        f"generator tokenizer; sub-{MIN_CHUNK_TOKENS}-token tails dropped",
-        f"{n_pass} passages -> {len(cdf)} chunks",
-        "Fixed-size chunks make budget arithmetic exact across arms",
-        n_pass, len(cdf),
-    )
 
     # ---- C2: tag structured-looking chunks in prose corpora (feeds RQ4)
     prose_mask = cdf["content_type"] == "prose"

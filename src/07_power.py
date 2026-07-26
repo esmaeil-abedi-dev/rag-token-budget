@@ -57,6 +57,11 @@ def main():
         elif t["test"] == "mcnemar_exact" and pd.notna(t.get("n_discordant_b")):
             n_obs = n_mcnemar(int(t["n_discordant_b"]), int(t["n_discordant_c"]), int(t["n"]))
             formula = "discordant-pair formula"
+        elif t["test"] in ("welch_t", "paired_t") and pd.notna(t["effect"]) and t["effect"] != 0:
+            # RQ2's observed-effect n (the brief requires assumed vs observed
+            # for EVERY RQ): n per group = (z_{1-a/2}+z_b)^2 / d^2
+            n_obs = (Z_A + Z_B) ** 2 / float(t["effect"]) ** 2
+            formula = "n = (z_a/2+z_b)^2/d^2 (per group, t-test approximation)"
         else:
             continue
         rows.append(dict(

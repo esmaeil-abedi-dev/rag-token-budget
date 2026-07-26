@@ -44,49 +44,81 @@ def reorder(texts_gold: list[str], texts_other: list[str], where: str) -> str:
     return SEP.join(parts)
 
 
+# Arms whose cached chunk_ids ARE the selected evidence set. Compression arms
+# store the full candidate pool and emit rewritten text, so "hold the evidence
+# set constant and move the gold chunk" is undefined for them.
+SELECTION_ARMS = ["naive_topk", "naive_topk_dedup", "rerank_topk", "graph_select"]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--workers", type=int, default=8)
-    args = ap.parse_args()
+    ap.add_argument("--yes", action="store_true", help="skip the spend confirmation")
+    args, _ = ap.parse_known_args()
 
     if OUT_CSV.exists() and not args.force:
         print("[04c] exists, skipping")
         return
 
+    from common import n_tokens
     from retrieval_ctx import RetrievalContext
 
     ctx = RetrievalContext()
     ev = pd.read_parquet(DATA / "eval_records.parquet")
-    prim = ev[(ev.sweep == "primary") & (ev.budget == ABLATION_BUDGET)]
+    prim = ev[(ev.sweep == "primary") & (ev.budget == ABLATION_BUDGET)
+              & (ev.arm.isin(SELECTION_ARMS))]
+    if not len(prim):
+        raise SystemExit("[04c] no primary records for selection arms — run 05 first")
     best_arm = prim.groupby("arm")["em"].mean().idxmax()
-    print(f"[04c] best arm at {ABLATION_BUDGET}: {best_arm}")
+    overall_best = (ev[(ev.sweep == "primary") & (ev.budget == ABLATION_BUDGET)]
+                    .groupby("arm")["em"].mean().idxmax())
+    note = ("" if overall_best == best_arm else
+            f" (overall best {overall_best} is a compression arm — position is "
+            f"undefined for rewritten text, so the best SELECTION arm is ablated; disclosed)")
+    print(f"[04c] ablating {best_arm} at {ABLATION_BUDGET}{note}")
 
     qp = pd.read_parquet(DATA / "questions_primary_clean.parquet").to_dict("records")
     if args.limit:
         qp = qp[: args.limit]
-    client = openrouter_client()
 
-    jobs, skipped = [], 0
+    jobs, skipped_no_assembly, skipped_no_gold, skipped_over_budget = [], 0, 0, 0
     for q in qp:
         a = cache_get_json("assembled", f"{best_arm}_{ABLATION_BUDGET}_{q['question_id']}")
         if a is None:
-            skipped += 1
+            skipped_no_assembly += 1
             continue
         gold_pids = set(q["gold_passage_ids"])
         gold_chunks = [cid for cid in a["chunk_ids"]
                        if cid.rsplit("_c", 1)[0] in gold_pids]
         other_chunks = [cid for cid in a["chunk_ids"] if cid not in gold_chunks]
         if not gold_chunks or not other_chunks:
-            skipped += 1
+            skipped_no_gold += 1
             continue
         tg = [ctx.chunk(c).text for c in gold_chunks]
         to = [ctx.chunk(c).text for c in other_chunks]
-        for pos in POSITIONS:
-            jobs.append((q, pos, reorder(tg, to, pos)))
+        variants = [(pos, reorder(tg, to, pos)) for pos in POSITIONS]
+        # same chunks, same separators — only BPE-boundary jitter is possible;
+        # verify rather than assume, and never truncate (that would change the
+        # held-constant evidence set)
+        if any(n_tokens(text) > ABLATION_BUDGET for _, text in variants):
+            skipped_over_budget += 1
+            continue
+        for pos, text in variants:
+            jobs.append((q, pos, text))
 
-    print(f"[04c] {len(jobs)} generations ({skipped} questions skipped: no gold in selected set)")
+    print(f"[04c] {len(jobs)} generations "
+          f"(skipped: {skipped_no_assembly} no cached assembly, "
+          f"{skipped_no_gold} no gold in selected set, "
+          f"{skipped_over_budget} BPE-jitter over budget)")
+    if not args.yes:
+        resp = input(f"[04c] ~{len(jobs)} paid generations + judging. Proceed? [y/N] ")
+        if resp.strip().lower() not in ("y", "yes"):
+            print("aborted before spending")
+            return
+    client = openrouter_client()
+    skipped = skipped_no_assembly + skipped_no_gold + skipped_over_budget
 
     def work(job):
         q, pos, text = job
@@ -119,11 +151,15 @@ def main():
     fig.tight_layout()
     fig.savefig(OUT_FIG, dpi=300)
 
-    update_manifest(stage04c=dict(best_arm=best_arm, n_questions=len(df) // 3,
-                                  skipped_no_gold=skipped))
+    update_manifest(stage04c=dict(
+        best_arm=best_arm, n_questions=len(df) // 3,
+        skipped_no_assembly=skipped_no_assembly,
+        skipped_no_gold_in_selection=skipped_no_gold,
+        skipped_over_budget=skipped_over_budget))
     append_log("Stage 04c position ablation",
                f"arm={best_arm} @ {ABLATION_BUDGET} tokens\n```\n{agg.to_string()}\n```\n"
-               f"{skipped} questions skipped (no gold chunk in the arm's selected set).")
+               f"skipped: {skipped_no_assembly} no assembly, {skipped_no_gold} no gold "
+               f"in selection, {skipped_over_budget} BPE jitter.")
 
 
 if __name__ == "__main__":

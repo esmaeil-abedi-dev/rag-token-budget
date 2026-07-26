@@ -233,3 +233,82 @@ hop group under --limit.
   fallback path); 05 projection gate works ($23.16 upper bound, both sweeps,
   judge included).
 - PREREGISTRATION.md committed (dad5921) BEFORE any evaluation sweep.
+
+---
+
+## 2026-07-26 13:35 — Stage 01 acquire — run complete
+
+```
+primary questions: 600 (multi=300, single=300)
+structured questions: 600
+passage pool: 26444 passages (1304 gold-linked)
+per dataset:
+dataset       hop_type
+hotpotqa      multi       150
+liverag       single       75
+ms_marco      single       75
+multihop_rag  multi       150
+nq_open_gold  single       75
+squad_v2      single       75
+failures: none
+```
+Outputs: questions_primary.parquet, questions_structured.parquet, passages_pool.parquet, raw_profile.csv, fig_dataset_profile.png. Seed 42.
+
+---
+
+## 2026-07-26 13:36 — Stage 02 clean — run complete
+
+```
+questions: primary 600, structured 600
+corpus: 25957 passages -> 72967 chunks (mean 109.4 tokens; 12310 structured)
+gold coverage: primary questions with >=1 matched gold passage: 600/600
+```
+Full step log in outputs/data_cleaning_log.csv.
+
+---
+
+## 2026-07-26 13:55 — Review round 1: 5-agent audit, full fix pass (NO API)
+
+Five parallel reviewers (brief compliance, pipeline, arms/runner, statistics,
+reproducibility) audited docs + code + real artifacts. 1 CRITICAL, ~12 MAJOR,
+~25 minor findings — all triaged and fixed before any evaluation spend:
+
+- **CRITICAL fixed:** assembled-context cache key now includes arm label +
+  hyperparameters — the hops=1 sensitivity run can no longer silently reuse
+  hops=2 contexts (which would have fabricated a "no difference" result).
+- **Statistics (prereg Amendment 1, still pre-data):** RQ2 now uses ONE slope
+  per question (was 5x pseudo-replicated per question x arm); RQ4 tests at the
+  1,000-token budget only (was pooling 4 correlated records/question). NaN
+  p-values excluded from BH families; Haldane-corrected discordant odds; CIs
+  added to RQ2/RQ4 effects; winner's-curse caveat attached to RQ1; APT columns
+  renamed *_per_1k; per-dataset results table with CIs added; RQ2 observed-n
+  added to 07.
+- **Data integrity:** gold-evidence gate now runs AFTER chunking (2 unwinnable
+  questions eliminated); gold passages exempt from min-length chunk drop; chunk
+  n_tokens re-encoded (0 mismatches, 0 U+FFFD); is_gold made uniform =
+  "evidence of a sampled question" (MultiHop-RAG evidence now protected;
+  HotpotQA no longer over-protects 3,300 distractor golds); per-dataset RNG
+  streams (sample now a pure function of seed+dataset); LiveRAG restricted to
+  single-doc questions (hop labels true); structured-tag regex tightened
+  (LiveRAG false positives 1,294 -> 703).
+- **Execution:** eval_records now rebuilt from ALL checkpoints (a --sweep rerun
+  can't clobber earlier sweeps); checkpoints validated by question-ID set; 04b/
+  04c accept forwarded flags + spend gates; 04c restricted to selection arms
+  with BPE-jitter verification; RECOMP charged the full pool read in APT_total;
+  rerank cost charged once per question; uncached-only spend accounting;
+  fail-fast on 4xx; judge context guard raised to 200k chars (full_context
+  judged whole); graph arm fully deterministic (sorted set iteration + tie
+  breaks; PYTHONHASHSEED=0 in run_all.sh as defense-in-depth).
+- **Deliverables/hygiene:** src/08_summary.py now generates RESULTS_SUMMARY.md
+  (all 13 items incl. floor-to-ceiling fractions, contamination table, APT
+  ranking-change verdict); spot-check CSV includes context + human columns and
+  08 computes the agreement rate; judge/generation prompts recorded in
+  manifest; synthetic stage06/07 manifest keys REMOVED and stale deviations
+  retired (correction noted in manifest.corrections); README rewritten to match
+  the real implementation; requirements.lock.txt committed; .gitignore data/
+  sample negation fixed; LLM cache key includes provider pin.
+- Stages 01+02 re-ran with the fixes (still $0 generator spend): 600+600
+  questions, 25,957 passages -> 72,967 chunks, gold coverage 600/600, zero
+  failures. All round-1 artifact invariant failures verified fixed.
+
+Round 2 (full re-review by fresh agents) launching next.

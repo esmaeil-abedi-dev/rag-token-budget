@@ -31,7 +31,17 @@ from common import (  # noqa: E402
     update_manifest,
 )
 
-RNG = np.random.default_rng(SEED)
+# One independent, fixed-index RNG stream per dataset: the sample each dataset
+# draws is then a pure function of (SEED, dataset), regardless of load order,
+# network state, or another dataset failing. A single shared stream consumed
+# sequentially would re-deal every downstream sample whenever anything upstream
+# changed (observed across the first stage-01 attempts).
+_DS_STREAM = {"hotpotqa": 1, "multihop_rag": 2, "squad_v2": 3, "nq_open_gold": 4,
+              "ms_marco": 5, "liverag": 6, "wikitablequestions": 7}
+
+
+def rng_for(dataset: str) -> np.random.Generator:
+    return np.random.default_rng([SEED, _DS_STREAM[dataset]])
 
 Q_PRIMARY = DATA / "questions_primary.parquet"
 Q_STRUCTURED = DATA / "questions_structured.parquet"
@@ -70,6 +80,8 @@ def profile_rows(name, rows, fields) -> dict:
         vals = [r.get(f_) for r in rows]
         empty = sum(1 for v in vals if v is None or (isinstance(v, (str, list)) and len(v) == 0))
         prof[f"null_rate.{f_}"] = round(empty / max(n, 1), 4)
+        first = next((v for v in vals if v is not None), None)
+        prof[f"type.{f_}"] = type(first).__name__ if first is not None else "NoneType"
     qlens = [len(str(r.get("question", "")).split()) for r in rows]
     alens = [
         len(str(r["gold_answers"][0]).split()) if r.get("gold_answers") else 0 for r in rows
@@ -121,15 +133,17 @@ def acquire_hotpotqa():
     prof = profile_rows("hotpotqa (distractor dev)", rows,
                         ["question", "gold_answers", "gold_passages"])
 
-    idx = RNG.permutation(len(rows))
+    idx = rng_for("hotpotqa").permutation(len(rows))
     sampled = [rows[i] for i in idx[: N_MULTI["hotpotqa"]]]
     distractor_q = [rows[i] for i in idx[N_MULTI["hotpotqa"]:
                                          N_MULTI["hotpotqa"] + N_DISTRACTOR_Q["hotpotqa"]]]
+    # is_gold means "supporting evidence of a SAMPLED question" — uniformly
+    # across datasets. Distractor questions' own golds are just distractors.
     passages = []
-    for r in sampled + distractor_q:
+    for r, is_sampled in [(x, True) for x in sampled] + [(x, False) for x in distractor_q]:
         for t, p in zip(r.pop("_all_titles"), r.pop("_all_passages")):
             passages.append(dict(dataset="hotpotqa", title=t, text=p, content_type="prose",
-                                 is_gold=t in r["gold_titles"]))
+                                 is_gold=is_sampled and t in r["gold_titles"]))
     return sampled, passages, prof
 
 
@@ -157,17 +171,20 @@ def acquire_multihop_rag():
     prof = profile_rows("multihop_rag", rows, ["question", "gold_answers", "gold_passages"])
     usable = [r for r in rows if r["gold_answers"][0].strip().lower()
               not in ("insufficient information.", "insufficient information")]
-    idx = RNG.permutation(len(usable))
+    idx = rng_for("multihop_rag").permutation(len(usable))
     sampled = []
     for i in idx:
         r = dict(usable[i]); r.pop("_qtype", None)
         sampled.append(r)
         if len(sampled) == N_MULTI["multihop_rag"]:
             break
-    # corpus: full 609-article news corpus is the distractor pool
+    # corpus: the full 609-article news corpus. An article is gold iff its
+    # title is a SAMPLED question's evidence source (uniform is_gold semantics
+    # — this protects real evidence from near-dup removal in 02).
+    sampled_gold_titles = {t for r in sampled for t in r["gold_titles"]}
     passages = [
         dict(dataset="multihop_rag", title=c["title"], text=c["body"],
-             content_type="prose", is_gold=False)
+             content_type="prose", is_gold=c["title"] in sampled_gold_titles)
         for c in corpus
     ]
     return sampled, passages, prof
@@ -195,16 +212,20 @@ def acquire_squad(n_target: int):
     answerable = [r for r in rows if r["gold_answers"]]
     prof["note"] = (f"sampled from answerable subset ({len(answerable)}/{len(rows)}); "
                     "unanswerable items lack a gold string for EM/F1")
-    idx = RNG.permutation(len(answerable))
+    idx = rng_for("squad_v2").permutation(len(answerable))
     sampled = [answerable[i] for i in idx[:n_target]]
     distractors = [answerable[i] for i in idx[n_target: n_target + N_DISTRACTOR_Q["squad_v2"]]]
-    seen, passages = set(), []
+    sampled_ids = {r["question_id"] for r in sampled}
+    seen, passages = {}, []
     for r in sampled + distractors:
         c = r["gold_passages"][0]
+        gold = r["question_id"] in sampled_ids
         if c not in seen:
-            seen.add(c)
+            seen[c] = len(passages)
             passages.append(dict(dataset="squad_v2", title=r["gold_titles"][0], text=c,
-                                 content_type="prose", is_gold=r in sampled))
+                                 content_type="prose", is_gold=gold))
+        elif gold:  # same context serves a sampled question too — keep it gold
+            passages[seen[c]]["is_gold"] = True
     return sampled, passages, prof
 
 
@@ -228,12 +249,13 @@ def acquire_nq(n_target: int):
             )
         )
     prof = profile_rows("nq_open_gold (test)", rows, ["question", "gold_answers", "gold_passages"])
-    idx = RNG.permutation(len(rows))
+    idx = rng_for("nq_open_gold").permutation(len(rows))
     sampled = [rows[i] for i in idx[:n_target]]
     distractors = [rows[i] for i in idx[n_target: n_target + N_DISTRACTOR_Q["nq_open_gold"]]]
+    sampled_ids = {r["question_id"] for r in sampled}
     passages = [
         dict(dataset="nq_open_gold", title=r["gold_titles"][0], text=r["gold_passages"][0],
-             content_type="prose", is_gold=r in sampled)
+             content_type="prose", is_gold=r["question_id"] in sampled_ids)
         for r in sampled + distractors
     ]
     return sampled, passages, prof
@@ -264,12 +286,12 @@ def acquire_msmarco(n_target: int):
     prof = profile_rows("ms_marco v2.1 (dev)", rows, ["question", "gold_answers", "gold_passages"])
     usable = [r for r in rows if r["gold_answers"] and r["gold_passages"]]
     prof["note"] = f"sampled from answered subset with a selected passage ({len(usable)}/{len(rows)})"
-    idx = RNG.permutation(len(usable))
+    idx = rng_for("ms_marco").permutation(len(usable))
     sampled = [usable[i] for i in idx[:n_target]]
     distractor_q = [usable[i] for i in idx[n_target: n_target + N_DISTRACTOR_Q["ms_marco"]]]
     passages = []
-    for r in sampled + distractor_q:
-        golds = set(r["gold_passages"])
+    for r, is_sampled in [(x, True) for x in sampled] + [(x, False) for x in distractor_q]:
+        golds = set(r["gold_passages"]) if is_sampled else set()
         for t in r.pop("_all_passages"):
             passages.append(dict(dataset="ms_marco", title="", text=t,
                                  content_type="prose", is_gold=t in golds))
@@ -297,19 +319,26 @@ def acquire_liverag(n_target: int):
                      hop_type="single", content_type="prose", gold_titles=[],
                      gold_passages=docs, n_supporting_facts=len(docs))
             )
-        usable = [r for r in rows if r["gold_answers"][0] and r["gold_passages"]]
+        # single-doc questions only: liverag sits in the single-hop stratum, and
+        # multi-doc DataMorgana items would mislabel the 300/300 hop balance
+        usable = [r for r in rows
+                  if r["gold_answers"][0] and len(r["gold_passages"]) == 1]
         if len(usable) >= n_target:
             prof = profile_rows("liverag (LiveRAG/Benchmark)", rows,
                                 ["question", "gold_answers", "gold_passages"])
-            prof["note"] = "long-form answers: EM unreliable, use F1/faithfulness"
-            idx = RNG.permutation(len(usable))
+            prof["note"] = ("long-form answers: EM unreliable, use F1/faithfulness; "
+                            "sampled from single-document questions only "
+                            f"({len(usable)}/{len(rows)}) to keep hop labels true")
+            idx = rng_for("liverag").permutation(len(usable))
             sampled = [usable[i] for i in idx[:n_target]]
             distractors = [usable[i] for i in idx[n_target: n_target + 800]]
+            sampled_ids = {r["question_id"] for r in sampled}
             passages = []
             for r in sampled + distractors:
                 for p in r["gold_passages"]:
                     passages.append(dict(dataset="liverag", title="", text=p,
-                                         content_type="prose", is_gold=r in sampled))
+                                         content_type="prose",
+                                         is_gold=r["question_id"] in sampled_ids))
             return sampled, passages, prof, "LiveRAG/Benchmark"
     except Exception as e:
         print(f"  LiveRAG/Benchmark direct load failed: {e!r}")
@@ -340,20 +369,22 @@ def acquire_liverag(n_target: int):
                          hop_type="single", content_type="prose", gold_titles=[],
                          gold_passages=gp, n_supporting_facts=len(gp))
                 )
-            usable = [r for r in rows if r["gold_answers"] and r["gold_passages"]]
+            usable = [r for r in rows if r["gold_answers"] and len(r["gold_passages"]) == 1]
             if len(usable) < n_target:
                 continue
             prof = profile_rows(f"liverag ({repo})", rows,
                                 ["question", "gold_answers", "gold_passages"])
-            prof["note"] = f"loaded from {repo}"
-            idx = RNG.permutation(len(usable))
+            prof["note"] = f"loaded from {repo}; single-document questions only"
+            idx = rng_for("liverag").permutation(len(usable))
             sampled = [usable[i] for i in idx[:n_target]]
             distractors = [usable[i] for i in idx[n_target: n_target + 800]]
+            sampled_ids = {r["question_id"] for r in sampled}
             passages = []
             for r in sampled + distractors:
                 for p in r["gold_passages"]:
                     passages.append(dict(dataset="liverag", title="", text=p,
-                                         content_type="prose", is_gold=r in sampled))
+                                         content_type="prose",
+                                         is_gold=r["question_id"] in sampled_ids))
             return sampled, passages, prof, repo
         except Exception as e:
             last_err = e
@@ -397,16 +428,20 @@ def acquire_wtq(n_target: int):
     prof = profile_rows("wikitablequestions (dev+train pool)", rows,
                         ["question", "gold_answers", "gold_passages"])
     usable = [r for r in rows if r["gold_answers"]]
-    idx = RNG.permutation(len(usable))
+    idx = rng_for("wikitablequestions").permutation(len(usable))
     sampled = [usable[i] for i in idx[:n_target]]
     distractors = [usable[i] for i in idx[n_target: n_target + 1000]]
-    seen, passages = set(), []
+    sampled_ids = {r["question_id"] for r in sampled}
+    seen, passages = {}, []
     for r in sampled + distractors:
         t = r["gold_passages"][0]
+        gold = r["question_id"] in sampled_ids
         if t not in seen:
-            seen.add(t)
+            seen[t] = len(passages)
             passages.append(dict(dataset="wikitablequestions", title=r["gold_titles"][0],
-                                 text=t, content_type="structured", is_gold=r in sampled))
+                                 text=t, content_type="structured", is_gold=gold))
+        elif gold:  # table shared with a sampled question stays gold
+            passages[seen[t]]["is_gold"] = True
     return sampled, passages, prof
 
 
@@ -474,8 +509,22 @@ def main():
     args, _ = ap.parse_known_args()
 
     outputs = [Q_PRIMARY, Q_STRUCTURED, PASSAGES, RAW_PROFILE, FIG_PROFILE]
-    if skip_if_exists(outputs, args.force, "01_acquire"):
+    # a previous run that recorded failures (or an empty mandatory output) is
+    # NOT complete — outputs existing is necessary but not sufficient to skip
+    prev_failures = {}
+    if MANIFEST := (DATA / "manifest.json"):
+        if MANIFEST.exists():
+            import json as _json
+
+            prev_failures = _json.loads(MANIFEST.read_text()).get("stage01", {}).get("failures", {})
+    complete = not prev_failures and all(p.exists() for p in outputs)
+    if complete and len(pd.read_parquet(Q_STRUCTURED)) == 0:
+        complete = False
+    if complete and skip_if_exists(outputs, args.force, "01_acquire"):
         return
+    if not complete and not args.force and all(p.exists() for p in outputs):
+        print(f"[01] outputs exist but previous run was incomplete "
+              f"(failures={list(prev_failures)}) — re-running")
 
     profiles, failures = [], {}
     all_questions, all_passages = [], []
@@ -576,6 +625,9 @@ def main():
     )
     if failures:
         manifest_kwargs["deviation"] = f"stage01 dataset failures: {sorted(failures)}"
+    else:
+        # clean run supersedes any stale failure deviations from earlier attempts
+        manifest_kwargs["resolve_deviation_prefix"] = "stage01 dataset failures"
     update_manifest(**manifest_kwargs)
     append_log(
         "Stage 01 acquire — run complete",

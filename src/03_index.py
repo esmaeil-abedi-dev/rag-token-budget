@@ -112,33 +112,47 @@ def load_into_pgvector(cdf: pd.DataFrame, emb: np.ndarray):
 
 
 def dense_topk(qvecs: np.ndarray, emb: np.ndarray, k: int) -> np.ndarray:
-    """Exact cosine top-k via the in-memory matrix (validation uses exact search;
-    pgvector HNSW serves query-time retrieval in 05)."""
+    """Exact cosine top-k via the in-memory matrix. NOTE: exact search is used
+    for validation here AND for query-time retrieval in 04/05 (retrieval_ctx) —
+    pgvector holds the same vectors as the persistent store, so ANN recall
+    variance never contaminates the arm comparison. Recorded in the manifest."""
     emb_n = emb / (np.linalg.norm(emb, axis=1, keepdims=True) + 1e-9)
     q_n = qvecs / (np.linalg.norm(qvecs, axis=1, keepdims=True) + 1e-9)
     sims = q_n @ emb_n.T
     return np.argsort(-sims, axis=1)[:, :k]
 
 
+def _unique_pids(idx_row, pid_of, cap: int) -> list:
+    """Chunk ranks -> UNIQUE passage ids in rank order: recall@k must count
+    passage slots, not let one long passage's 5 chunks occupy 5 of the top k."""
+    seen, out = set(), []
+    for j in idx_row:
+        p = pid_of[j]
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+            if len(out) == cap:
+                break
+    return out
+
+
 def evaluate_retrieval(questions: pd.DataFrame, cdf: pd.DataFrame, emb: np.ndarray,
                        bm25, qvecs: np.ndarray) -> pd.DataFrame:
     """Doc-level recall@k and MRR: a gold passage counts as retrieved when any of
-    its chunks appears in the top k."""
+    its chunks appears among the top-k DISTINCT passages."""
     pid_of = cdf["passage_id"].to_numpy()
     rows = []
-    top_dense = dense_topk(qvecs, emb, max(KS))
+    # retrieve deep enough that k distinct passages survive chunk-dedup
+    top_dense = dense_topk(qvecs, emb, max(KS) * 4)
 
-    tokenized_corpus_len = len(cdf)
     for qi, (_, q) in enumerate(questions.iterrows()):
         gold = set(q["gold_passage_ids"])
         if not gold:
             continue
-        # dense
-        ranked_pids = [pid_of[j] for j in top_dense[qi]]
-        # bm25
+        ranked_pids = _unique_pids(top_dense[qi], pid_of, max(KS))
         scores = bm25.get_scores(str(q["question"]).lower().split())
-        bm_idx = np.argsort(-scores)[: max(KS)]
-        bm_pids = [pid_of[j] for j in bm_idx]
+        bm_idx = np.argsort(-scores)[: max(KS) * 4]
+        bm_pids = _unique_pids(bm_idx, pid_of, max(KS))
 
         for method, plist in (("dense_bge_m3", ranked_pids), ("bm25", bm_pids)):
             first_hit = next((r + 1 for r, p in enumerate(plist) if p in gold), None)
@@ -151,7 +165,6 @@ def evaluate_retrieval(questions: pd.DataFrame, cdf: pd.DataFrame, emb: np.ndarr
                      mrr=1.0 / first_hit if first_hit else 0.0,
                      **{f"recall@{k}": rec[k] for k in KS})
             )
-    assert tokenized_corpus_len == len(pid_of)
     per_q = pd.DataFrame(rows)
     agg = (
         per_q.groupby(["dataset", "method"])[[f"recall@{k}" for k in KS] + ["mrr"]]
@@ -202,7 +215,9 @@ def main():
     cdf = pd.read_parquet(CORPUS)
     qp = pd.read_parquet(QP_CLEAN)
     qs = pd.read_parquet(QS_CLEAN)
-    print(f"[03] embedding {len(cdf)} chunks via OpenRouter ({'baai/bge-m3'}) ...")
+    from common import EMBEDDING_MODEL
+
+    print(f"[03] embedding {len(cdf)} chunks via OpenRouter ({EMBEDDING_MODEL}) ...")
     emb = embed_parallel(cdf["text"].tolist())
     np.save(EMB_NPY, emb)
     CHUNK_IDS.write_text(json.dumps(cdf["chunk_id"].tolist()))
@@ -237,7 +252,9 @@ def main():
         stage03=dict(
             n_chunks=len(cdf),
             embedding_dim=int(emb.shape[1]),
-            vector_store="pgvector (podman, HNSW cosine); numpy copy for graph arm",
+            vector_store=("pgvector (podman) persists all vectors + HNSW index; "
+                          "query-time retrieval uses exact in-memory cosine over the "
+                          "same vectors to eliminate ANN recall variance"),
             hotpot_dense_recall_at_50=gate_val,
             gate_passed=bool(gate_ok),
         )

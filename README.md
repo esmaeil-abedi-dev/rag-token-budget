@@ -12,136 +12,121 @@ practitioner decision guide.
 > Capstone project — QM640 Data Analytics Capstone, Walsh College.
 > This is an experimental benchmarking study (comparative, not predictive): it applies
 > ML/AI systems and evaluates them with formal statistical inference.
+> The full analysis plan was **pre-registered before any evaluation ran** — see
+> [PREREGISTRATION.md](PREREGISTRATION.md); the lab journal is
+> [EXPERIMENT_LOG.md](EXPERIMENT_LOG.md).
 
 ---
 
 ## Research questions
 
-| RQ  | Question | Test |
-|-----|----------|------|
-| RQ1 | At a matched token budget, which assembly strategy is most accurate? | McNemar's paired test (α = 0.05) |
-| RQ2 | Does the accuracy-per-token trade-off differ on single-hop vs multi-hop questions? | Two-proportion test, Cohen's h |
-| RQ3 | Does graph-based selection beat flat similarity retrieval on the frontier? | McNemar's paired test (multi-hop) |
-| RQ4 | How robust is each strategy on structured / code-like passages? | McNemar's paired test (structured subset) |
+| RQ  | Question | Primary test (see PREREGISTRATION.md) |
+|-----|----------|----------|
+| RQ1 | At a matched token budget, which assembly strategy is most accurate? | Two-proportion z (Cohen's h) + McNemar exact, best arm vs naive at 1,000 tokens |
+| RQ2 | Does the accuracy-per-token trade-off differ on single-hop vs multi-hop questions? | Welch t on per-question F1-vs-log2(budget) slopes |
+| RQ3 | Does graph-based selection beat flat similarity retrieval? | Two-proportion z (Cohen's h) + McNemar exact, graph vs naive at 1,000 tokens |
+| RQ4 | How robust is each strategy on structured/table content? | Two-proportion z at 1,000 tokens, structured sweep vs prose (unpaired, disclosed) |
 
-## Context-assembly strategies compared (the independent variable)
+All test families are Benjamini–Hochberg FDR-corrected; effect sizes are reported with
+bootstrap CIs; both the pre-registered tests and the paired-appropriate McNemar tests
+are reported side by side.
 
-1. **Naive top-k** — concatenate the k most similar chunks until the budget is filled (baseline).
-2. **Reranked top-k** — cross-encoder rerank, then fill the budget (strong baseline).
-3. **Prompt compression** — LLMLingua-2 and LongLLMLingua.
-4. **Summarization compression** — RECOMP (extractive + abstractive).
-5. **Graph-based selection** — seed then expand/prune along graph edges (the novel arm).
+## Context-assembly strategies (the independent variable)
 
-Everything else is held constant: one fixed generator, one fixed retriever, token budget
-swept over **{500, 1k, 2k, 4k, 8k}** as a controlled variable.
+1. **`naive_topk`** — concatenate the most similar chunks until the budget is full (baseline).
+2. **`rerank_topk`** — cross-encoder rerank (Cohere rerank-v3.5 via OpenRouter), then fill.
+3. **`compress_llmlingua`** — LLMLingua-2 token-level compression (question-agnostic, per the published method; labelled fallback if unavailable).
+4. **`summarize_recomp`** — RECOMP-style extractive selection + abstractive summarization to budget.
+5. **`graph_select`** — **the novel arm**: entity/similarity graph over chunks, seed-and-expand (1–2 hops), relevance × centrality scoring, connected-set fill.
 
----
+Plus controls: `naive_topk_dedup` (isolates deduplication from graph structure), four
+reference conditions (no-context floor, gold-context ceiling, random chunks,
+uncapped full context), and a hops-1 sensitivity run of the graph arm.
 
-## Stack
+Everything else is held constant: one generator, one retriever, one judge; token budget
+swept over **{500, 1,000, 2,000, 4,000}** (fixed by the graded Synopsis).
 
-Built from scratch on open components — no private data, no pre-existing system.
+## Stack (all models through one OpenRouter key)
 
-- **Gateway:** [OpenRouter](https://openrouter.ai) — a single API for embeddings, reranking, and generation.
-- **Embeddings:** an open model (e.g. BGE-M3, 1024-dim) served via OpenRouter.
-- **Vector store:** [pgvector](https://github.com/pgvector/pgvector) (dense) + **BM25** (sparse baseline).
-- **Generator:** one fixed mid-size open-weight model served via OpenRouter (a second model as a robustness check).
-- **Evaluation:** Exact Match, token-level F1, RAGAS (faithfulness / answer relevance / context precision), recall@k, MRR, tokens, cost, latency.
+- **Generator:** `qwen/qwen3-30b-a3b-instruct-2507` (open weights; pinned to one bf16 provider; temperature 0). Budgets enforced with **its own tokenizer** — token accounting is the object of study, so no proxy tokenizers.
+- **Judge:** `openai/gpt-4o-mini` (fixed model + pinned prompt; cross-vendor from the generator).
+- **Embeddings:** `baai/bge-m3` (1024-dim) via OpenRouter.
+- **Vector store:** pgvector (Postgres 17 in podman) persists all vectors; query-time retrieval uses exact cosine over the same vectors (no ANN variance). BM25 (`rank_bm25`) as the sparse baseline.
+- **Caching:** every paid call (generation, judging, embedding, rerank) is cached in SQLite keyed by content hash — interrupted runs resume without re-spending.
 
 ## Datasets (all public; no Kaggle data)
 
-| Dataset | Role | Link |
-|---------|------|------|
-| HotpotQA | Primary multi-hop QA | https://hotpotqa.github.io/ |
-| MultiHop-RAG | Multi-hop RAG over a news corpus | https://github.com/yixuantt/MultiHop-RAG |
-| SQuAD | Single-hop reading comprehension | https://rajpurkar.github.io/SQuAD-explorer/ |
-| Natural Questions | Single-hop contrast | https://ai.google.com/research/NaturalQuestions |
-| MS MARCO | Single-hop passage QA | https://microsoft.github.io/msmarco/ |
-| LiveRAG (SIGIR 2025) | Contamination-robust 2025 benchmark | https://arxiv.org/abs/2507.04942 |
+| Dataset | Role | Sampled |
+|---------|------|---------|
+| HotpotQA (distractor dev) | primary multi-hop | 150 |
+| MultiHop-RAG | second multi-hop (news) | 150 |
+| SQuAD v2 (dev) | single-hop | 75 |
+| Natural Questions (nq_open_gold variant) | single-hop | 75 |
+| MS MARCO v2.1 (dev) | single-hop | 75 |
+| LiveRAG Benchmark | contamination control (post-cutoff) | 75 |
+| WikiTableQuestions | structured/table content for RQ4 | 600 (separate sweep) |
 
----
+Primary sample: **600 questions** (300 multi-hop / 300 single-hop, seed 42), the scale
+the graded Synopsis commits to; the structured RQ4 sweep is a second powered 600.
 
 ## Metrics
 
-- **Answer quality:** Exact Match, token-level F1; RAGAS faithfulness / answer relevance / context precision for free-form answers (single fixed judge).
-- **Retriever quality:** recall@k, MRR (measured separately so it is not confused with generation quality).
-- **Efficiency:** input tokens (the budget axis, provider-neutral), estimated cost (tokens × price), latency.
-- **Headline composite:** Accuracy-per-Token, `APT(strategy, budget) = Quality / input_tokens`. A strategy Pareto-dominates another at a budget if it reaches at least the quality at no more tokens.
+- **Answer quality:** SQuAD-normalized Exact Match; token-level F1; judge-scored faithfulness and answer relevance.
+- **Retrieval quality (validated before use):** doc-level recall@{1,5,10,20,50} + MRR, with a hard gate (HotpotQA dense recall@50 ≥ 0.7) before any arm runs.
+- **Efficiency:** three token counters per record — generator input, assembly input, assembly output — giving **APT under two accountings**: `APT_generator` (Synopsis metric) and `APT_total` (honest end-to-end cost including what rerankers/compressors read). The Pareto frontier is plotted both ways; a ranking flip is a headline finding.
 
 ## Sample size / statistical power
 
-- α = 0.05 (two-sided), power = 0.80.
-- Paired McNemar tests (RQ1/RQ3/RQ4): `n = (z_{α/2}·√p_disc + z_β·√(p_disc − d²))² / d²`.
-- To detect a 5-point Exact-Match gap (d = 0.05, p_disc = 0.30): **n = 940** questions.
-- RQ2 (two-proportion, Cohen's h = 0.167): **n ≈ 564** per hop-type.
-- RQ4 (structured subset, p_disc = 0.35): **n = 1,097**.
-- **Final target: N = max(RQ1–RQ4) = 1,097** evaluation questions per dataset per arm.
-
----
+From the Synopsis (α = 0.05, power = 0.80): N = max(170, 34, 356, 564) = **564**, met by
+the 600-question pooled comparisons. Per-dataset slices (~75–150) are **exploratory
+only**. `src/07_power.py` recomputes every requirement from the *observed* effect sizes
+(two-proportion with the factor of 2; McNemar discordant-pair formula) and reports
+assumed vs observed side by side.
 
 ## Repository layout
 
 ```
-rag-token-budget/
-├── README.md
-├── requirements.txt
-├── .env.example              # OPENROUTER_API_KEY, DATABASE_URL (pgvector)
-├── config/
-│   └── budgets.yaml           # token budgets, model IDs, retriever settings
-├── data/
-│   ├── loaders/               # dataset download + normalization
-│   └── build_index.py         # chunk, embed (OpenRouter), load into pgvector + BM25
-├── arms/
-│   ├── naive_topk.py
-│   ├── rerank_topk.py
-│   ├── llmlingua.py           # LLMLingua-2 / LongLLMLingua
-│   ├── recomp.py
-│   └── graph_select.py        # novel graph-based selection arm
-├── eval/
-│   ├── run_experiment.py      # score every arm × budget × dataset
-│   ├── metrics.py             # EM, F1, RAGAS, recall@k, MRR, APT
-│   └── stats.py               # McNemar, two-proportion, bootstrap CIs
-├── analysis/
-│   ├── pareto_frontier.py     # accuracy-per-token curves
-│   └── decision_guide.py      # per-budget dominance table
-└── results/                   # per-question result tables (CSV/Parquet)
+├── PREREGISTRATION.md        # analysis plan, committed before any evaluation
+├── EXPERIMENT_LOG.md         # append-only lab journal (decisions + runs + reasons)
+├── requirements.txt          # ranges; requirements.lock.txt = exact recorded versions
+├── run_all.sh                # 01 -> 08 end to end (paid stages gated)
+├── src/
+│   ├── common.py             # seed, tokenizer, OpenRouter clients, SQLite caches, manifest
+│   ├── 01_acquire.py         # datasets + seeded sampling + profile
+│   ├── 02_clean.py           # cleaning log (graded), chunking 128/32
+│   ├── 03_index.py           # embeddings -> pgvector + BM25; retrieval validation gate
+│   ├── 04_arms.py            # chunk graph build + budget-compliance proof
+│   ├── 04b_baselines.py      # floor / ceiling / random / full-context references
+│   ├── 04c_position.py       # lost-in-the-middle ablation
+│   ├── 05_run.py             # the sweeps (cost projection + confirmation)
+│   ├── 06_analyze.py         # figures + pre-registered & McNemar tests + BH-FDR
+│   ├── 07_power.py           # observed-effect sample sizes
+│   └── 08_summary.py         # outputs/RESULTS_SUMMARY.md (the deliverable)
+├── arms/                     # the five strategies + dedup control
+├── data/                     # gitignored except data/sample/
+└── outputs/                  # committed figures + CSVs the report cites
 ```
 
 ## Quickstart
 
 ```bash
-# 1. Install
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+uv venv --python 3.11 .venv && uv pip install -r requirements.txt --python .venv/bin/python
+cp .env.example .env          # add OPENROUTER_API_KEY; never commit .env
+podman run -d --name ragtb-pgvector -e POSTGRES_USER=rag -e POSTGRES_PASSWORD=rag \
+  -e POSTGRES_DB=ragtb -p 127.0.0.1:5434:5432 -v ragtb_pgdata:/var/lib/postgresql/data \
+  docker.io/pgvector/pgvector:pg17
 
-# 2. Configure (copy and fill in your keys — never commit .env)
-cp .env.example .env
-#   OPENROUTER_API_KEY=...
-#   DATABASE_URL=postgresql://.../ragbudget   # a pgvector-enabled Postgres
-
-# 3. Build the corpus + index (chunk, embed via OpenRouter, load pgvector + BM25)
-python data/build_index.py --dataset hotpotqa
-
-# 4. Run the experiment across all arms and budgets
-python eval/run_experiment.py --dataset hotpotqa --budgets 500 1000 2000 4000 8000
-
-# 5. Build the accuracy-per-token frontier and decision guide
-python analysis/pareto_frontier.py
-python analysis/decision_guide.py
+./run_all.sh                  # full pipeline; 05 prints projected cost and asks first
+.venv/bin/python src/05_run.py --limit 20 --yes    # smoke test
+.venv/bin/python src/05_run.py --dry-run           # cost projection only
 ```
 
 ## Reproducibility
 
-- All datasets are public; none are drawn from Kaggle.
-- The retrieval and generation stack is built entirely on open components through OpenRouter,
-  so the pipeline runs end to end with a single API key and a pgvector-enabled Postgres.
-- Random seeds, model IDs, and the graph edge/expansion policy are fixed in `config/` before evaluation.
-- Cost is reported first as input tokens (provider-neutral), then as dollars under a stated price.
-
-## Status
-
-Capstone in progress. The four flat arms (naive, reranked, compression, summarization) are the
-guaranteed deliverable; the **graph-based selection arm** is the novel contribution, with a
-mid-project go/no-go checkpoint on whether to give it first-class treatment or hold it as a stretch goal.
+- Seed 42 with an independent RNG stream per dataset (the sample is a pure function of the seed).
+- `PYTHONHASHSEED=0` in `run_all.sh`; all order-sensitive set iterations are sorted.
+- Model IDs, provider pin, prompts, chunking parameters, and every deviation live in `data/manifest.json`.
+- All datasets public; no Kaggle. Cost reported first in tokens, then dollars from API-returned usage.
 
 ## License
 

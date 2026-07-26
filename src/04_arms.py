@@ -81,7 +81,6 @@ def build_graph(force: bool):
     if not force and ENTITIES.exists() and EDGES.exists():
         print("[04] graph artifacts exist, skipping build")
         return
-    from retrieval_ctx import RetrievalContext
 
     # entities ------------------------------------------------------------
     cdf = pd.read_parquet(DATA / "corpus_chunks.parquet")
@@ -183,6 +182,7 @@ def compliance(force: bool):
             print(f"  {arm:22s} budget={budget:5d}  mean_util={mu:.3f}  n={len(done)}")
 
     df = pd.DataFrame(rows)
+    df["violation"] = df["realized_tokens"] > df["budget"]
     agg = (
         df.groupby(["arm", "budget"])
         .agg(n=("realized_tokens", "size"),
@@ -191,11 +191,11 @@ def compliance(force: bool):
              mean_utilization=("utilization", "mean"),
              mean_assembly_in=("assembly_input_tokens", "mean"),
              mean_assembly_out=("assembly_output_tokens", "mean"),
-             mean_assembly_s=("assembly_s", "mean"))
+             mean_assembly_s=("assembly_s", "mean"),
+             violations=("violation", "sum"))  # measured, not asserted-and-assumed
         .round(3)
         .reset_index()
     )
-    agg["violations"] = 0  # assemble() asserts; reaching here means none
     agg.to_csv(COMPLIANCE, index=False)
     print(agg.to_string(index=False))
     append_log(
@@ -209,8 +209,15 @@ def compliance(force: bool):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--yes", action="store_true", help="skip the spend confirmation")
     args, _ = ap.parse_known_args()
     build_graph(args.force)
+    if not (COMPLIANCE.exists() and not args.force) and not args.yes:
+        est = N_COMPLIANCE_Q * (0.002 + 0.0015)  # rerank searches + RECOMP summaries
+        resp = input(f"[04] compliance run makes paid calls (~${est:.2f}). Proceed? [y/N] ")
+        if resp.strip().lower() not in ("y", "yes"):
+            print("aborted before spending")
+            return
     compliance(args.force)
 
 
