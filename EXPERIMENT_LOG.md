@@ -204,21 +204,32 @@ Full step log in outputs/data_cleaning_log.csv.
 
 ---
 
-## 2026-07-26 13:00 — Stage 06 analysis
+## 2026-07-26 13:00 — ⚠ SYNTHETIC SMOKE TEST of stages 06+07 — NOT RESULTS
 
-```
-results rows: 120; tests: 40 (11 significant after BH-FDR); figures written (300 dpi)
-```
+The two auto-appended entries that stood here came from running 06_analyze and
+07_power on **clearly labelled synthetic records** (random EM draws) purely to
+verify the analysis code executes end-to-end. Every number they printed was
+fake by construction; every artifact they wrote was deleted immediately
+(outputs/ holds only real-run files: data_cleaning_log.csv,
+fig_dataset_profile.png). No real evaluation has run yet. One robustness fix
+came out of the smoke test: RQ2's slope contrast now guards against a missing
+hop group under --limit.
 
 ---
 
-## 2026-07-26 13:00 — Stage 07 power refresh
+## 2026-07-26 13:05 — Cache redesign + implementation complete, verified offline (NO API)
 
-```
- rq                        comparison budget             test  observed_effect  n_assumed_synopsis  n_observed_effect                 formula  alpha  power  primary_comparison
-RQ1        graph_select vs naive_topk   1000 two_proportion_z           0.2019                 170                386  n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
-RQ1        graph_select vs naive_topk   1000    mcnemar_exact           1.5000                 170                391 discordant-pair formula   0.05    0.8                True
-RQ3        graph_select vs naive_topk   1000 two_proportion_z           0.2019                 356                386  n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
-RQ3        graph_select vs naive_topk   1000    mcnemar_exact           1.5000                 356                391 discordant-pair formula   0.05    0.8                True
-RQ4 graph_select: structured vs prose pooled two_proportion_z          -0.0528                 564               5626  n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
-```
+- **Cache redesign (user disk constraint):** the external drive is ExFAT with
+  large allocation clusters; 21k per-call JSON files occupied 21 GB for ~0.4 GB
+  of vectors. All caches (LLM, embeddings, rerank, assembled contexts) moved to
+  one SQLite file (`llm_cache/cache.db`, WAL). 21,040 already-paid embeddings
+  migrated (1 corrupt file from the killed run discarded); 21 GB reclaimed.
+- Stage 03's embedding run was STOPPED partway (21,040 / 76,168 chunks
+  embedded, ~$0.03 spent) on the user's instruction: **no further API calls
+  until explicitly approved.** All spending stages are gated on that approval.
+- Offline verification (zero API): all scripts compile; SQuAD EM/F1 unit checks
+  pass; all local arms budget-compliant at every budget on synthetic chunks
+  (naive, dedup, graph at hops 1 and 2; RECOMP extractive stage; LLMLingua
+  fallback path); 05 projection gate works ($23.16 upper bound, both sweeps,
+  judge included).
+- PREREGISTRATION.md committed (dad5921) BEFORE any evaluation sweep.
