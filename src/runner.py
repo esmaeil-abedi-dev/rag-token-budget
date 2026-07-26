@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -167,8 +168,11 @@ def run_block(questions: list[dict], *, sweep: str, arm: str, budget, ctx,
             return out
     client = openrouter_client()
 
+    print(f"  [block {sweep}/{label}/b={budget}] assembling {len(questions)} contexts ...",
+          flush=True)
+    t_asm = time.time()
     assembled = []
-    for q in questions:
+    for i, q in enumerate(questions, 1):
         cands = ctx.candidates(q["question_id"])
         gold_ids = set(q.get("gold_passage_ids", []))
         gold_in_pool = any(c.chunk_id.rsplit("_c", 1)[0] in gold_ids for c in cands)
@@ -176,6 +180,9 @@ def run_block(questions: list[dict], *, sweep: str, arm: str, budget, ctx,
         a = assemble_cached(q, cands, budget, arm, extra,
                             arm_label=arm_label, arm_kwargs=arm_kwargs)
         assembled.append((q, a, gold_in_pool))
+        if i % 50 == 0 or i == len(questions):
+            print(f"    assembly {i}/{len(questions)} "
+                  f"({(time.time()-t_asm)/60:.1f} min)", flush=True)
 
     def work(item):
         """Per-item failure containment (prereg exclusion rule 2): a question
@@ -213,8 +220,25 @@ def run_block(questions: list[dict], *, sweep: str, arm: str, budget, ctx,
                     "judge_parse_ok": False} if with_judge else {}),
             )
 
+    print(f"  [block {sweep}/{label}/b={budget}] generating + judging "
+          f"({workers} workers) ...", flush=True)
+    t_gen = time.time()
+    done = {"n": 0}
+    lock = threading.Lock()
+
+    def work_logged(item):
+        rec = work(item)
+        with lock:
+            done["n"] += 1
+            if done["n"] % 50 == 0 or done["n"] == len(assembled):
+                rate = done["n"] / max(time.time() - t_gen, 1)
+                eta = (len(assembled) - done["n"]) / max(rate, 0.01) / 60
+                print(f"    gen+judge {done['n']}/{len(assembled)} "
+                      f"({rate:.1f}/s, ~{eta:.0f} min left)", flush=True)
+        return rec
+
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        records = list(ex.map(work, assembled))
+        records = list(ex.map(work_logged, assembled))
 
     df = pd.DataFrame(records)
     df["resumed_from_checkpoint"] = False
