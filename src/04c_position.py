@@ -69,13 +69,8 @@ def main():
     n_want = len(pd.read_parquet(DATA / "questions_primary_clean.parquet"))
     if args.limit:
         n_want = min(n_want, args.limit)
-    if OUT_CSV.exists() and not args.force:
-        prev_manifest = _json.loads(MANIFEST_PATH.read_text()) if MANIFEST_PATH.exists() else {}
-        n_prev = prev_manifest.get("stage04c", {}).get("n_input_questions", 0)
-        if n_prev >= n_want:
-            print(f"[04c] previous run covered {n_prev} input questions >= {n_want}, skipping")
-            return
-        print(f"[04c] previous run covered only {n_prev} < {n_want} input questions — re-running")
+    prev_manifest = _json.loads(MANIFEST_PATH.read_text()) if MANIFEST_PATH.exists() else {}
+    prev_04c = prev_manifest.get("stage04c", {})
 
     ctx = RetrievalContext()
     ev = pd.read_parquet(DATA / "eval_records.parquet")
@@ -90,6 +85,16 @@ def main():
             f" (overall best {overall_best} is a compression arm — position is "
             f"undefined for rewritten text, so the best SELECTION arm is ablated; disclosed)")
     print(f"[04c] ablating {best_arm} at {ABLATION_BUDGET}{note}")
+
+    # skip only when the previous run covered at least as many input questions
+    # AND ablated the same arm — a re-swept design can change the best arm
+    if OUT_CSV.exists() and not args.force:
+        if (prev_04c.get("n_input_questions", 0) >= n_want
+                and prev_04c.get("best_arm") == best_arm):
+            print(f"[04c] previous run covered {prev_04c['n_input_questions']} questions "
+                  f"with the same best arm ({best_arm}), skipping")
+            return
+        print("[04c] previous run under-covers or ablated a different arm — re-running")
 
     qp = pd.read_parquet(DATA / "questions_primary_clean.parquet").to_dict("records")
     if args.limit:
@@ -140,16 +145,26 @@ def main():
 
     def work(job):
         q, pos, text = job
-        r = run_record(q, text, sweep="position", arm=f"{best_arm}@{pos}",
-                       budget=ABLATION_BUDGET, assembly=None, gold_in_pool=True,
-                       client=client)
-        r["position"] = pos
-        return r
+        try:
+            r = run_record(q, text, sweep="position", arm=f"{best_arm}@{pos}",
+                           budget=ABLATION_BUDGET, assembly=None, gold_in_pool=True,
+                           client=client)
+            r["position"] = pos
+            r["failed"] = False
+            return r
+        except Exception as e:  # containment: one bad question must not kill the stage
+            print(f"  RECORD FAILED position/{pos} {q['question_id']}: {e!r}")
+            return dict(question_id=q["question_id"], position=pos, failed=True,
+                        em=float("nan"), f1=float("nan"), faithfulness=float("nan"))
 
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
         recs = list(ex.map(work, jobs))
     df = pd.DataFrame(recs)
+    n_rec_failed = int(df["failed"].sum())
+    if n_rec_failed:
+        print(f"[04c] {n_rec_failed} failed records excluded (disclosed)")
+        df = df[~df["failed"].astype(bool)]
     agg = df.groupby("position")[["em", "f1", "faithfulness"]].agg(["mean", "count"]).round(4)
     agg.to_csv(OUT_CSV)
     print(agg.to_string(), f"\n({time.time()-t0:.0f}s)")

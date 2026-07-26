@@ -268,10 +268,23 @@ def fig_structured_vs_prose(df: pd.DataFrame):
     arms = [a for a in ARM_ORDER if a in set(df.arm)]
     x = np.arange(len(arms)); w = 0.38
     fig, ax = plt.subplots(figsize=(10, 6))
-    pm = [prose[prose.arm == a]["em"].mean() for a in arms]
-    sm = [struct[struct.arm == a]["em"].mean() for a in arms]
-    ax.bar(x - w / 2, pm, w, label="prose (primary sweep)")
-    ax.bar(x + w / 2, sm, w, label="structured (RQ4 sweep)")
+
+    def mean_ci(series):
+        v = series.to_numpy().astype(float)
+        if not len(v):
+            return np.nan, 0.0
+        idx = RNG.integers(0, len(v), size=(2000, len(v)))
+        m = v.mean()
+        lo, hi = np.percentile(v[idx].mean(axis=1), [2.5, 97.5])
+        return m, max(m - lo, hi - m)
+
+    pm_ci = [mean_ci(prose[prose.arm == a]["em"]) for a in arms]
+    sm_ci = [mean_ci(struct[struct.arm == a]["em"]) for a in arms]
+    pm = [m for m, _ in pm_ci]; sm = [m for m, _ in sm_ci]
+    ax.bar(x - w / 2, pm, w, yerr=[e for _, e in pm_ci], capsize=4,
+           label="prose (primary sweep)")
+    ax.bar(x + w / 2, sm, w, yerr=[e for _, e in sm_ci], capsize=4,
+           label="structured (RQ4 sweep)")
     for i, (a, b) in enumerate(zip(pm, sm)):
         if pd.notna(a) and pd.notna(b):  # EM of exactly 0.0 still gets its delta
             ax.annotate(f"{(b - a):+.2f}", (x[i], max(a, b) + 0.01), ha="center", fontsize=8)
@@ -345,6 +358,9 @@ def run_tests(df: pd.DataFrame) -> list[dict]:
     for budget in BUDGETS:
         by_em = (prim[(prim.budget == budget) & (prim.arm.isin(SYNOPSIS_ARMS))]
                  .groupby("arm")["em"].mean())
+        if "naive_topk" not in by_em.index or len(by_em) < 2:
+            print(f"  [06] RQ1 @ {budget}: arms missing (partial sweep) — skipped")
+            continue
         best = by_em.drop("naive_topk").idxmax()
         m = paired_frame(prim, best, "naive_topk", budget)
         tp = two_prop(m)

@@ -145,13 +145,12 @@ def main():
         judge = 0.0
         if "judge_cached" in live:
             judge = live.loc[~live["judge_cached"].astype(bool), "judge_cost_usd"].sum()
-        # rerank zeroes cached reuses itself; RECOMP marks summary_cached in meta
-        asm = 0.0
-        for _, r in live.iterrows():
-            if r["cost_assembly_usd"]:
-                meta = json.loads(r["arm_meta"]) if r["arm_meta"] else {}
-                if not meta.get("summary_cached", False):
-                    asm += r["cost_assembly_usd"]
+        # assembly replayed from the assembled cache costs nothing this run
+        # (assembly_from_cache flag); fresh assemblies already zero their own
+        # cached sub-calls (rerank_cached / summary_cached)
+        fresh = live[~live.get("assembly_from_cache",
+                               pd.Series(False, index=live.index)).astype(bool)]
+        asm = float(fresh["cost_assembly_usd"].sum())
         return float(gen + judge + asm)
 
     for sweep, questions in (("primary", q_primary), ("structured", q_structured)):
@@ -188,16 +187,26 @@ def main():
     }
     full_ids["sensitivity_h1"] = full_ids["primary"]
     # under --limit / --tier1-only, THIS run's reduced sets are the expectation
+    # — but ONLY for sweeps this run actually executed. A sweep not executed
+    # here keeps the FULL expectation: an empty this-run set would satisfy
+    # `set() <= anything` and wave stale smoke checkpoints straight through.
     this_run_ids = {"primary": {q["question_id"] for q in q_primary},
                     "structured": {q["question_id"] for q in q_structured},
-                    "sensitivity_h1": {q["question_id"] for q in q_primary}}
+                    "sensitivity_h1": ({q["question_id"] for q in q_primary}
+                                       if not args.skip_sensitivity else set())}
+    executed = {s for s in ("primary", "structured") if s in sweeps and this_run_ids[s]}
+    if not args.skip_sensitivity and "primary" in executed:
+        executed.add("sensitivity_h1")
     reduced = bool(args.limit or args.tier1_only)
 
     frames_ok, quarantined = [], []
     for p in sorted(PARTIAL_DIR.glob("*.parquet")):
         cdf_ = pd.read_parquet(p)
         sweep_name = p.name.split("__")[0]
-        expected = (this_run_ids if reduced else full_ids).get(sweep_name)
+        if reduced and sweep_name in executed:
+            expected = this_run_ids.get(sweep_name)
+        else:
+            expected = full_ids.get(sweep_name)
         if expected is None or expected <= set(cdf_["question_id"]):
             frames_ok.append(cdf_)
         else:

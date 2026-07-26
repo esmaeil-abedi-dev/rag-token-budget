@@ -407,3 +407,34 @@ been pruned + VACUUMed (96 MB -> 26 MB). Stage 03 will embed the remaining
 
 Reviewer 3 (arms + stats) still running; round 4 follows regardless, since
 round 3 was NOT CLEAN.
+
+---
+
+## 2026-07-26 14:11 — Review round 3 complete: all three verdicts in, all findings fixed (NO API)
+
+Reviewer 3 (arms + stats) numerically re-verified the whole statistical stack
+(two-prop/h vs statsmodels, McNemar vs exact binomial, BH, RQ2 slopes, all
+four 07 power branches within <2% of statsmodels power solvers, effect_dz CSV
+round-trip, 08's column references) and confirmed graph-arm determinism
+byte-identical across hash seeds. Verdicts: 3x NOT CLEAN, converging on two
+MAJORs — both now fixed and regression-tested:
+
+1. 04c assembled-cache read lacked the round-2 corpus-fingerprint prefix
+   (found independently by all three reviewers): fixed; key format verified
+   identical across the writer and both readers.
+2. Checkpoint-quarantine hole: sweeps NOT executed in a reduced run got empty
+   expectations, so set() <= anything admitted stale smoke checkpoints (e.g.
+   --limit 20 smoke then --tier1-only would report RQ4 on n=20). Fixed: only
+   sweeps actually executed this run use reduced expectations; regression
+   test passes.
+
+Minors fixed: fingerprint hashes chunk TEXT (not just positional ids);
+assembly_from_cache flag -> spend accounting ignores replays (incl. rerank);
+failure-record judge fields gated on with_judge (schema parity per mode);
+04c per-record failure containment + skip gate now also re-runs when the best
+arm changed; fig_structured_vs_prose gained bootstrap CIs; RQ1 guards missing
+arms under partial sweeps; 402/4xx fail-fast in embed/rerank; 03 refuses to
+skip when outputs exist without a manifest record; unreachable emb cache rows
+pruned (21,040 removed, 96 MB -> 26 MB) with the re-key documented above.
+
+ROUND 4 is the verification round: same three lenses, full re-review.

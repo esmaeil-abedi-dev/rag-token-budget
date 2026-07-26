@@ -90,7 +90,9 @@ def assemble_cached(q: dict, cands, budget: int, arm: str, extra: dict,
     key = f"{corpus_fingerprint()}_{key}"
     hit = cache_get_json("assembled", key)
     if hit is not None:
-        return hit
+        # replay: the historical cost stays in the record for per-arm cost
+        # stats, but this-run spend accounting must see the cache hit
+        return {**hit, "assembly_from_cache": True}
     res = assemble(q["question"], cands, budget, arm, **extra, **arm_kwargs)
     d = dict(text=res.text, chunk_ids=res.chunk_ids,
              gen_context_tokens=res.gen_context_tokens,
@@ -125,6 +127,7 @@ def run_record(q: dict, context_text: str | None, *, sweep: str, arm: str, budge
         em=exact_match(gen.text, golds),
         f1=f1_score(gen.text, golds),
         gen_cached=gen.cached,
+        assembly_from_cache=bool((assembly or {}).get("assembly_from_cache", False)),
         retrieval_gold_in_pool=gold_in_pool,
         empty_context=(context_text is not None and not context_text.strip()),
         arm_meta=json.dumps((assembly or {}).get("meta", {})),
@@ -195,11 +198,15 @@ def run_block(questions: list[dict], *, sweep: str, arm: str, budget, ctx,
                 predicted_answer="", gold_answer=json.dumps(
                     [str(g) for g in q["gold_answers"]]),
                 em=float("nan"), f1=float("nan"), gen_cached=False,
+                assembly_from_cache=False,
                 retrieval_gold_in_pool=gip, empty_context=False,
                 arm_meta=json.dumps({"error": repr(e)[:300]}),
                 wall_s=0.0, failed=True,
-                faithfulness=float("nan"), answer_relevance=float("nan"),
-                judge_cost_usd=0.0, judge_cached=False, judge_parse_ok=False,
+                # judge fields mirror run_record's schema exactly — but only
+                # when this block judges at all (schema parity per mode)
+                **({"faithfulness": float("nan"), "answer_relevance": float("nan"),
+                    "judge_cost_usd": 0.0, "judge_cached": False,
+                    "judge_parse_ok": False} if with_judge else {}),
             )
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
