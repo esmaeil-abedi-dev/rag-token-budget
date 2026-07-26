@@ -95,9 +95,12 @@ def main():
     if args.limit:
         qp = qp[: args.limit]
 
+    from runner import corpus_fingerprint
+
+    fp = corpus_fingerprint()  # keys are fingerprint-prefixed by the writer (runner.py)
     jobs, skipped_no_assembly, skipped_no_gold, skipped_over_budget = [], 0, 0, 0
     for q in qp:
-        a = cache_get_json("assembled", f"{best_arm}_{ABLATION_BUDGET}_{q['question_id']}")
+        a = cache_get_json("assembled", f"{fp}_{best_arm}_{ABLATION_BUDGET}_{q['question_id']}")
         if a is None:
             skipped_no_assembly += 1
             continue

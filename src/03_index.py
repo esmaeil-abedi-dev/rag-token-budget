@@ -216,13 +216,17 @@ def main():
     outputs_03 = [EMB_NPY, CHUNK_IDS, BM25_PKL, RQ_CSV, FIG_RECALL,
                   DATA / "question_embeddings.npy", DATA / "question_ids.json"]
     if skip_if_exists(outputs_03, args.force, "03_index"):
-        # a completed-but-FAILED gate must keep failing on re-run, not slip
-        # past skip-if-exists into a paid sweep capped by broken retrieval
+        # a completed-but-FAILED gate must keep failing on re-run, and outputs
+        # WITHOUT a manifest record (crash before update_manifest) don't count
+        # as a completed stage either
         manifest = json.loads((DATA / "manifest.json").read_text()) if (DATA / "manifest.json").exists() else {}
-        if manifest.get("stage03", {}).get("gate_passed") is False:
+        gate = manifest.get("stage03", {}).get("gate_passed")
+        if gate is False:
             print("[03] previous run FAILED the retrieval gate — refusing to pass silently")
             sys.exit(2)
-        return
+        if gate is True:
+            return
+        print("[03] outputs exist but no stage03 manifest record — re-validating")
 
     cdf = pd.read_parquet(CORPUS)
     qp = pd.read_parquet(QP_CLEAN)

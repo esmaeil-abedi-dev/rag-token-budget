@@ -122,9 +122,31 @@ def main():
             q, text = item
             budget = {"no_context": 0, "gold_context": -1,
                       "random_chunks": RANDOM_BUDGET, "full_context": -1}[_cond]
-            return run_record(q, text, sweep="baseline", arm=_cond, budget=budget,
-                              assembly=None, gold_in_pool=gold_pool_flag(q, _cond),
-                              client=client)
+            try:
+                rec = run_record(q, text, sweep="baseline", arm=_cond, budget=budget,
+                                 assembly=None, gold_in_pool=gold_pool_flag(q, _cond),
+                                 client=client)
+                rec["failed"] = False
+                return rec
+            except Exception as e:  # containment, like run_block: disclose, don't die
+                print(f"  RECORD FAILED baseline/{_cond} {q['question_id']}: {e!r}")
+                import json as _json
+
+                return dict(question_id=q["question_id"], dataset=q["dataset"],
+                            hop_type=q["hop_type"], content_type=q["content_type"],
+                            sweep="baseline", arm=_cond, budget=budget,
+                            gen_context_tokens=0, gen_input_tokens=0, output_tokens=0,
+                            assembly_input_tokens=0, assembly_output_tokens=0,
+                            latency_assembly_s=0.0, latency_gen_s=0.0,
+                            cost_gen_usd=0.0, cost_assembly_usd=0.0,
+                            predicted_answer="",
+                            gold_answer=_json.dumps([str(g) for g in q["gold_answers"]]),
+                            em=float("nan"), f1=float("nan"), gen_cached=False,
+                            retrieval_gold_in_pool=False, empty_context=False,
+                            arm_meta=_json.dumps({"error": repr(e)[:300]}), wall_s=0.0,
+                            failed=True, faithfulness=float("nan"),
+                            answer_relevance=float("nan"), judge_cost_usd=0.0,
+                            judge_cached=False, judge_parse_ok=False)
 
         with ThreadPoolExecutor(max_workers=args.workers) as ex:
             recs = list(ex.map(work, items))

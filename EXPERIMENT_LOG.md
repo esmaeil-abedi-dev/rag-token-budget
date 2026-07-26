@@ -371,3 +371,39 @@ crashed or silently truncated the pipeline):
   after 37 boundary-split chunks were repaired during chunking.
 
 Round 3 (full re-review) launching next.
+
+---
+
+## 2026-07-26 14:09 — Review round 3 (in progress): fixes from first two verdicts (NO API)
+
+Correction to the round-2 entry: its header was hand-stamped "14:40" but the
+commit (05f2bcc) landed 13:58 — entries from here on use the actual clock.
+
+Round-3 reviewers 1+2 (brief compliance; pipeline+repro) both returned
+NOT CLEAN on the SAME single MAJOR: 04c read the assembled cache without the
+round-2 corpus-fingerprint prefix (a propagation gap in my own round-2 fix) —
+the position ablation would have deterministically found zero cached
+assemblies after a successful sweep. Fixed; key format now verified identical
+across the one writer and both readers.
+
+Also fixed from their minors: corpus fingerprint now hashes chunk text, not
+just positional IDs; 04b gained per-record failure containment (schema
+key-identical to runner's, verified by reviewer 2); 06 prints a loud
+SMOKE-SCALE warning (+ manifest note) when eval_records under-covers the
+design, and guards RQ2 against missing budget columns; 04 prints its cost
+projection even under --yes; 402/4xx fail-fast added to embed/rerank retry
+loops (was llm-only); 03's skip path now also refuses to skip when outputs
+exist without a manifest record; .gitignore un-ignores future
+data/sample/*.parquet.
+
+Embedding-cache bookkeeping, for the audit trail (reviewer 2 verified all of
+this bitwise): round 2 added base_url to the embed cache key, which made the
+21,040 pre-paid old-format rows unreachable. A LOCAL re-key pass copied the
+5,695 vectors whose texts survive in the current corpus to new-format keys
+(byte-identical copies — zero API calls, zero spend), and the 21,040
+unreachable rows (15,345 stale-corpus + 5,695 superseded originals) have now
+been pruned + VACUUMed (96 MB -> 26 MB). Stage 03 will embed the remaining
+~68.5k genuinely new texts for ~$0.08 when approved.
+
+Reviewer 3 (arms + stats) still running; round 4 follows regardless, since
+round 3 was NOT CLEAN.

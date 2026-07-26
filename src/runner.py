@@ -58,10 +58,14 @@ def corpus_fingerprint() -> str:
     if _corpus_fp is None:
         import hashlib
 
-        cdf = pd.read_parquet(DATA / "corpus_chunks.parquet", columns=["chunk_id"])
-        _corpus_fp = hashlib.sha256(
-            "\n".join(cdf["chunk_id"]).encode()
-        ).hexdigest()[:12]
+        # hash IDs AND text: positional chunk IDs can survive a rebuild whose
+        # text changed, and stale-context replay is exactly what this prevents
+        cdf = pd.read_parquet(DATA / "corpus_chunks.parquet", columns=["chunk_id", "text"])
+        h = hashlib.sha256()
+        for cid, txt in zip(cdf["chunk_id"], cdf["text"]):
+            h.update(cid.encode())
+            h.update(txt.encode())
+        _corpus_fp = h.hexdigest()[:12]
     return _corpus_fp
 
 def build_prompt(question: str, context: str | None) -> tuple[str, str]:

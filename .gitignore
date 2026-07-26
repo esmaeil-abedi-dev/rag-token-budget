@@ -17,6 +17,7 @@ data/*
 .cache/
 llm_cache/
 *.parquet
+!data/sample/*.parquet
 
 # --- python ---
 __pycache__/

@@ -328,6 +328,9 @@ def embed_texts(texts: list[str], *, batch_size: int = 64) -> "list[list[float]]
                 data = sorted(data, key=lambda d: d.get("index", 0))
                 break
             except Exception as e:
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status in (400, 401, 402, 403, 404, 405, 410, 413, 422):
+                    raise RuntimeError(f"embeddings call failed (non-retryable {status})") from e
                 if attempt == 5:
                     raise
                 time.sleep(min(2**attempt, 30))
@@ -369,6 +372,9 @@ def rerank(query: str, documents: list[str], *, top_n: int | None = None
             results = r.json()["results"]
             break
         except Exception as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status in (400, 401, 402, 403, 404, 405, 410, 413, 422):
+                raise RuntimeError(f"rerank call failed (non-retryable {status})") from e
             if attempt == 5:
                 raise
             time.sleep(min(2**attempt, 30))

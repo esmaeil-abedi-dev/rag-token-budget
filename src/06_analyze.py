@@ -398,6 +398,10 @@ def run_tests(df: pd.DataFrame) -> list[dict]:
         # Amendment 1 says "F1 averaged over the 5 arms": a question missing any
         # arm at any budget would mix arm compositions into its slope — drop it
         # and disclose rather than average unequal sets
+        if set(BUDGETS) - set(per_q.columns):
+            print(f"  [06] RQ2 {hop}: missing budget columns "
+                  f"{sorted(set(BUDGETS) - set(per_q.columns))} — skipped (partial sweep)")
+            continue
         complete = counts.eq(len(SYNOPSIS_ARMS)).all(axis=1)
         n_incomplete = int((~complete).sum())
         if n_incomplete:
@@ -510,10 +514,20 @@ def main():
         df = df[~df["failed"].astype(bool)]
     print(f"[06] {len(df)} records")
 
+    # scale sanity: final-looking outputs from smoke-scale data must shout
+    n_full = len(pd.read_parquet(DATA / "questions_primary_clean.parquet"))
+    n_prim = df[df.sweep == "primary"].question_id.nunique()
+    if 0 < n_prim < n_full:
+        print(f"[06] *** WARNING: primary sweep covers {n_prim}/{n_full} questions — "
+              f"these are SMOKE-SCALE outputs, not the committed design ***")
+        update_manifest(stage06_scale_warning=f"primary sweep n={n_prim} of {n_full}")
+
     res = results_table(df)
     base = DATA / "baseline_records.parquet"
     if base.exists():
         bdf = pd.read_parquet(base)
+        if "failed" in bdf.columns:
+            bdf = bdf[~bdf["failed"].astype(bool)]
         res = pd.concat([res, results_table(bdf)], ignore_index=True)
     res.to_csv(OUTPUTS / "preliminary_results.csv", index=False)
     results_by_dataset(df).to_csv(OUTPUTS / "preliminary_results_by_dataset.csv", index=False)

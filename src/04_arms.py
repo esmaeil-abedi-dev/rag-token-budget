@@ -220,13 +220,15 @@ def main():
     ap.add_argument("--yes", action="store_true", help="skip the spend confirmation")
     args, _ = ap.parse_known_args()
     build_graph(args.force)
-    if not (COMPLIANCE.exists() and not args.force) and not args.yes:
+    if not (COMPLIANCE.exists() and not args.force):
         # 25 rerank searches + 25 q x 4 budgets RECOMP summaries
         est = N_COMPLIANCE_Q * 0.002 + N_COMPLIANCE_Q * len(BUDGETS) * 0.0015
-        resp = input(f"[04] compliance run makes paid calls (~${est:.2f}). Proceed? [y/N] ")
-        if resp.strip().lower() not in ("y", "yes"):
-            print("aborted before spending")
-            return
+        print(f"[04] compliance projection: ~${est:.2f} (rerank + RECOMP summaries)")
+        if not args.yes:
+            resp = input("[04] compliance run makes paid calls. Proceed? [y/N] ")
+            if resp.strip().lower() not in ("y", "yes"):
+                print("aborted before spending")
+                return
     compliance(args.force)
 
 
