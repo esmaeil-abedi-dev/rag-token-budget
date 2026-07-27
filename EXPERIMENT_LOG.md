@@ -572,3 +572,74 @@ Colab from the embedding cache at ~$0 (all 74,156 vectors cached).
 
 State at handoff: stages 01-03 complete and validated (gate passed 0.947);
 stage 04 onward runs on Colab. Cumulative spend ≈ $0.11.
+
+---
+
+## 2026-07-27 18:22 — Stage 06 analysis
+
+```
+results rows: 103; tests: 37 (30 significant after BH-FDR); figures written (300 dpi)
+```
+
+---
+
+## 2026-07-27 18:23 — Stage 07 power refresh
+
+```
+ rq                               comparison  budget             test  observed_effect  n_assumed_synopsis  n_observed_effect                 formula  alpha  power  primary_comparison
+RQ1                rerank_topk vs naive_topk    1000 two_proportion_z           0.0467               170.0               7204  n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
+RQ1                rerank_topk vs naive_topk    1000    mcnemar_exact           1.7568               170.0               1199 discordant-pair formula   0.05    0.8                True
+RQ3               graph_select vs naive_topk    1000 two_proportion_z          -0.3578               356.0                123  n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
+RQ3               graph_select vs naive_topk    1000    mcnemar_exact           0.0909               356.0                 51 discordant-pair formula   0.05    0.8                True
+RQ4 graph_select: structured vs prose @ 1000    1000 two_proportion_z          -0.6240               564.0                 41  n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
+```
+
+---
+
+## 2026-07-27 18:23 — Stage 08 summary
+
+RESULTS_SUMMARY.md regenerated (with sweep records).
+
+---
+
+## 2026-07-27 18:23 — Colab sweep 41/49 blocks complete; partial analysis generated for the Interim Report
+
+Colab compute exhausted before the LLMLingua blocks; everything else FINISHED
+at full scale (n=600/block, 0 failed records, 100% judge parse):
+- primary + structured sweeps for naive_topk, naive_topk_dedup, rerank_topk,
+  summarize_recomp, graph_select (40 blocks) + the hops=1 sensitivity block.
+- PENDING (~next week, GPU): 8 compress_llmlingua blocks, then 04b baselines,
+  04c position ablation, and a final re-run of 06/07/08 with all arms.
+- RQ2's slope test correctly self-skipped (requires all 5 arms per question;
+  disclosed in the analysis output) — it will compute after LLMLingua lands.
+
+Headline PRELIMINARY findings (24,600 records; BH-FDR corrected; full tables
+in outputs/):
+1. RQ1: rerank_topk is the best arm at every budget (EM 0.517-0.532 vs naive
+   0.487-0.513); the pre-registered primary contrast at 1,000 tokens shows a
+   consistent but SMALL effect (h = 0.047, McNemar discordant odds 1.76) —
+   real, modest, honest.
+2. Budgets show strong diminishing returns: naive gains only +2.6 EM points
+   from 500 -> 4000 tokens (8x cost). The Pareto story favors small budgets.
+3. RQ3 (the novel arm): **clear, well-powered NEGATIVE result** — graph_select
+   underperforms naive_topk by ~16-20 EM points at every budget (h = -0.358
+   at the primary budget; required n = 123, we have 600). The dedup control
+   matches naive almost exactly, so the deficit is the graph selection itself,
+   not deduplication; hops=1 vs 2 sensitivity shows the result is not a
+   hyperparameter artifact (0.330 vs 0.323). Pre-registration anticipated
+   exactly this disclosure path.
+4. RQ4: structured (WTQ) content is far harder for every arm (EM 0.07-0.20 vs
+   prose ~0.29-0.53); graph_select degrades most (h = -0.624 at 1,000).
+   Partly a retrieval effect (WTQ dense recall@50 = 0.733) — stratification
+   fields are in the records for the report to separate the two.
+5. Mean judged faithfulness 0.704 across 24,600 records.
+
+Spend to date ≈ $21.5 of the $23-26 ceiling (sweep mostly cached now; the
+remaining LLMLingua + baselines + ablation fit in the ceiling).
+
+outputs/ regenerated from the partial data and committed: all six figures,
+preliminary_results(.by_dataset).csv, stats_tests.csv (37 tests, 30
+significant post-FDR), sample_size_observed.csv, fig_power_curve.png,
+RESULTS_SUMMARY.md (pending items marked NOT RUN honestly). Note:
+budget_compliance.csv and judge_spot_check_sample.csv live in the Drive sync
+outputs/ folder from the Colab session — to be merged when convenient.

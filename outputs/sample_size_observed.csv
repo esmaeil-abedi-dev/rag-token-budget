@@ -1,0 +1,38 @@
+rq,comparison,budget,test,observed_effect,n_assumed_synopsis,n_observed_effect,formula,alpha,power,primary_comparison
+RQ1,rerank_topk vs naive_topk,500,two_proportion_z,0.06,170.0,4360,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ1,rerank_topk vs naive_topk,500,mcnemar_exact,2.0286,170.0,754,discordant-pair formula,0.05,0.8,False
+RQ1,rerank_topk vs naive_topk,1000,two_proportion_z,0.0467,170.0,7204,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,True
+RQ1,rerank_topk vs naive_topk,1000,mcnemar_exact,1.7568,170.0,1199,discordant-pair formula,0.05,0.8,True
+RQ1,rerank_topk vs naive_topk,2000,two_proportion_z,0.05,170.0,6269,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ1,rerank_topk vs naive_topk,2000,mcnemar_exact,2.3043,170.0,773,discordant-pair formula,0.05,0.8,False
+RQ1,rerank_topk vs naive_topk,4000,two_proportion_z,0.0267,170.0,22039,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ1,rerank_topk vs naive_topk,4000,mcnemar_exact,1.6957,170.0,2206,discordant-pair formula,0.05,0.8,False
+RQ3,graph_select vs naive_topk,500,two_proportion_z,-0.4141,356.0,92,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ3,graph_select vs naive_topk,500,mcnemar_exact,0.1078,356.0,46,discordant-pair formula,0.05,0.8,False
+RQ3,graph_select vs naive_topk,1000,two_proportion_z,-0.3578,356.0,123,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,True
+RQ3,graph_select vs naive_topk,1000,mcnemar_exact,0.0909,356.0,51,discordant-pair formula,0.05,0.8,True
+RQ3,graph_select vs naive_topk,2000,two_proportion_z,-0.318,356.0,156,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ3,graph_select vs naive_topk,2000,mcnemar_exact,0.1174,356.0,61,discordant-pair formula,0.05,0.8,False
+RQ3,graph_select vs naive_topk,4000,two_proportion_z,-0.2897,356.0,188,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ3,graph_select vs naive_topk,4000,mcnemar_exact,0.1443,356.0,71,discordant-pair formula,0.05,0.8,False
+RQ3,graph_select vs naive_topk_dedup,500,two_proportion_z,-0.4041,356.0,97,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ3,graph_select vs naive_topk_dedup,500,mcnemar_exact,0.117,356.0,49,discordant-pair formula,0.05,0.8,False
+RQ3,graph_select vs naive_topk_dedup,1000,two_proportion_z,-0.3578,356.0,123,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ3,graph_select vs naive_topk_dedup,1000,mcnemar_exact,0.0909,356.0,51,discordant-pair formula,0.05,0.8,False
+RQ3,graph_select vs naive_topk_dedup,2000,two_proportion_z,-0.318,356.0,156,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ3,graph_select vs naive_topk_dedup,2000,mcnemar_exact,0.1174,356.0,61,discordant-pair formula,0.05,0.8,False
+RQ3,graph_select vs naive_topk_dedup,4000,two_proportion_z,-0.2897,356.0,188,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ3,graph_select vs naive_topk_dedup,4000,mcnemar_exact,0.1443,356.0,71,discordant-pair formula,0.05,0.8,False
+RQ3,graph_select vs rerank_topk,500,two_proportion_z,-0.4741,356.0,70,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ3,graph_select vs rerank_topk,500,mcnemar_exact,0.0644,356.0,37,discordant-pair formula,0.05,0.8,False
+RQ3,graph_select vs rerank_topk,1000,two_proportion_z,-0.4045,356.0,96,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ3,graph_select vs rerank_topk,1000,mcnemar_exact,0.0881,356.0,45,discordant-pair formula,0.05,0.8,False
+RQ3,graph_select vs rerank_topk,2000,two_proportion_z,-0.3681,356.0,116,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ3,graph_select vs rerank_topk,2000,mcnemar_exact,0.0954,356.0,50,discordant-pair formula,0.05,0.8,False
+RQ3,graph_select vs rerank_topk,4000,two_proportion_z,-0.3164,356.0,157,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ3,graph_select vs rerank_topk,4000,mcnemar_exact,0.1416,356.0,64,discordant-pair formula,0.05,0.8,False
+SENSITIVITY,graph_select hops=2 vs hops=1,1000,mcnemar_exact,0.68,,5885,discordant-pair formula,0.05,0.8,False
+RQ4,naive_topk: structured vs prose @ 1000,1000,two_proportion_z,-0.7086,564.0,32,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ4,rerank_topk: structured vs prose @ 1000,1000,two_proportion_z,-0.691,564.0,33,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ4,summarize_recomp: structured vs prose @ 1000,1000,two_proportion_z,-0.7547,564.0,28,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ4,graph_select: structured vs prose @ 1000,1000,two_proportion_z,-0.624,564.0,41,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,True
