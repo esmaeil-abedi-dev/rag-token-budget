@@ -218,6 +218,8 @@ def main():
     fp_now = corpus_fingerprint()
     frames_ok, quarantined = [], []
     for p in sorted(PARTIAL_DIR.glob("*.parquet")):
+        if p.name.startswith("._"):  # macOS AppleDouble junk from zip transfers
+            continue
         parts = p.stem.split("__")
         if len(parts) >= 4 and parts[3] != fp_now:
             quarantined.append(f"{p.name} (stale corpus fingerprint)")
