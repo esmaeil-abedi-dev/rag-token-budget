@@ -105,6 +105,11 @@ def main():
             return
 
     client = openrouter_client()
+    # Pre-warm the lazy tokenizer BEFORE the thread pool: 04b has no serial
+    # assembly phase, so 12 workers racing the first transformers import can
+    # hit a partial-init ImportError (observed: 11 gold_context records failed
+    # this way on Colab). One call here makes the load single-threaded.
+    n_tokens("warm-up")
 
     frames = []
     for cond in ["no_context", "gold_context", "random_chunks", "full_context"]:
