@@ -1,0 +1,4 @@
+position,em_mean,em_count,f1_mean,f1_count,faithfulness_mean,faithfulness_count
+end,0.5295,576,0.6774,576,0.9151,576
+middle,0.5156,576,0.6634,576,0.8998,576
+start,0.5365,576,0.6842,576,0.9259,576

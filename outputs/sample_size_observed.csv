@@ -32,7 +32,11 @@ RQ3,graph_select vs rerank_topk,2000,mcnemar_exact,0.0954,356.0,50,discordant-pa
 RQ3,graph_select vs rerank_topk,4000,two_proportion_z,-0.3164,356.0,157,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
 RQ3,graph_select vs rerank_topk,4000,mcnemar_exact,0.1416,356.0,64,discordant-pair formula,0.05,0.8,False
 SENSITIVITY,graph_select hops=2 vs hops=1,1000,mcnemar_exact,0.68,,5885,discordant-pair formula,0.05,0.8,False
+RQ2,multi: mean-arm F1@4000 vs F1@500 (paired by question),500vs4000,paired_t,0.1144,34.0,28,"n = (z_a/2+z_b)^2/d_z^2 (paired t, d_z = mean_diff/sd_diff)",0.05,0.8,False
+RQ2,single: mean-arm F1@4000 vs F1@500 (paired by question),500vs4000,paired_t,0.0737,34.0,29,"n = (z_a/2+z_b)^2/d_z^2 (paired t, d_z = mean_diff/sd_diff)",0.05,0.8,False
+RQ2,per-question F1-per-log2(budget) slope: multi vs single,slope,welch_t,0.206,34.0,370,n per group = 2(z_a/2+z_b)^2/d^2 (two-sample t approximation),0.05,0.8,True
 RQ4,naive_topk: structured vs prose @ 1000,1000,two_proportion_z,-0.7086,564.0,32,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
 RQ4,rerank_topk: structured vs prose @ 1000,1000,two_proportion_z,-0.691,564.0,33,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
+RQ4,compress_llmlingua: structured vs prose @ 1000,1000,two_proportion_z,-0.5441,564.0,54,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
 RQ4,summarize_recomp: structured vs prose @ 1000,1000,two_proportion_z,-0.7547,564.0,28,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,False
 RQ4,graph_select: structured vs prose @ 1000,1000,two_proportion_z,-0.624,564.0,41,n = 2(z_a/2+z_b)^2/h^2,0.05,0.8,True

@@ -575,71 +575,351 @@ stage 04 onward runs on Colab. Cumulative spend ≈ $0.11.
 
 ---
 
-## 2026-07-27 18:22 — Stage 06 analysis
+## 2026-07-26 15:16 — Stage 01 acquire — run complete
 
 ```
-results rows: 103; tests: 37 (30 significant after BH-FDR); figures written (300 dpi)
+primary questions: 600 (multi=300, single=300)
+structured questions: 600
+passage pool: 26444 passages (1304 gold-linked)
+per dataset:
+dataset       hop_type
+hotpotqa      multi       150
+liverag       single       75
+ms_marco      single       75
+multihop_rag  multi       150
+nq_open_gold  single       75
+squad_v2      single       75
+failures: none
+```
+Outputs: questions_primary.parquet, questions_structured.parquet, passages_pool.parquet, raw_profile.csv, fig_dataset_profile.png. Seed 42.
+
+---
+
+## 2026-07-26 15:19 — Stage 02 clean — run complete
+
+```
+questions: primary 600, structured 600
+corpus: 25957 passages -> 72967 chunks (mean 109.4 tokens; 12310 structured)
+gold coverage: primary questions with >=1 matched gold passage: 600/600
+```
+Full step log in outputs/data_cleaning_log.csv.
+
+---
+
+## 2026-07-26 15:38 — Stage 03 index — retrieval validated
+
+```
+           dataset       method  recall@1  recall@5  recall@10  recall@20  recall@50    mrr
+          hotpotqa         bm25    0.2933    0.5567     0.6467     0.7267     0.7967 0.6954
+          hotpotqa dense_bge_m3    0.4433    0.8000     0.9033     0.9333     0.9467 0.9291
+           liverag         bm25    0.7200    0.8400     0.8933     0.9067     0.9067 0.7803
+           liverag dense_bge_m3    0.9467    1.0000     1.0000     1.0000     1.0000 0.9711
+          ms_marco         bm25    0.1667    0.5467     0.7200     0.7933     0.8267 0.3388
+          ms_marco dense_bge_m3    0.4000    0.8200     0.9200     0.9733     0.9867 0.5924
+      multihop_rag         bm25    0.2139    0.5394     0.6378     0.7200     0.8122 0.6319
+      multihop_rag dense_bge_m3    0.2844    0.6656     0.8417     0.9533     0.9900 0.7717
+      nq_open_gold         bm25    0.3733    0.5600     0.6800     0.7067     0.7333 0.4661
+      nq_open_gold dense_bge_m3    0.7067    0.8667     0.8800     0.9067     0.9467 0.7805
+          squad_v2         bm25    0.4667    0.7067     0.7600     0.8000     0.8667 0.5768
+          squad_v2 dense_bge_m3    0.8400    0.9067     0.9600     0.9600     1.0000 0.8739
+wikitablequestions         bm25    0.1133    0.1517     0.1800     0.2017     0.2500 0.1349
+wikitablequestions dense_bge_m3    0.2650    0.4217     0.5017     0.6100     0.7333 0.3455
+            POOLED         bm25    0.2280    0.3787     0.4414     0.4821     0.5344 0.3685
+            POOLED dense_bge_m3    0.4043    0.6186     0.7040     0.7808     0.8546 0.5865
+```
+HotpotQA dense recall@50 = 0.947 (gate 0.7) — PASS
+
+---
+
+## 2026-07-26 16:10 — Stage 04 — budget compliance proven
+
+25 questions x 4 budgets x 6 arms, zero violations (assemble() asserts <= budget in real generator tokens).
+
+```
+               arm  budget  n  mean_realized  max_realized  mean_utilization  mean_assembly_in  mean_assembly_out  mean_assembly_s  violations
+compress_llmlingua     500 25         494.64           500             0.989          11652.80               0.00            4.145           0
+compress_llmlingua    1000 25         994.12          1000             0.994          11652.80               0.00            3.528           0
+compress_llmlingua    2000 25        1981.72          2000             0.991          11652.80               0.00            4.079           0
+compress_llmlingua    4000 25        3927.76          4000             0.982          11652.80               0.00            5.153           0
+      graph_select     500 25         478.68           493             0.957              0.00               0.00            0.014           0
+      graph_select    1000 25         974.52           989             0.975              0.00               0.00            0.016           0
+      graph_select    2000 25        1968.92          1978             0.984              0.00               0.00            0.022           0
+      graph_select    4000 25        3944.32          3962             0.986              0.00               0.00            0.051           0
+        naive_topk     500 25         478.28           497             0.957              0.00               0.00            0.327           0
+        naive_topk    1000 25         975.76           997             0.976              0.00               0.00            0.005           0
+        naive_topk    2000 25        1974.40          1996             0.987              0.00               0.00            0.009           0
+        naive_topk    4000 25        3969.32          3996             0.992              0.00               0.00            0.016           0
+  naive_topk_dedup     500 25         478.28           497             0.957              0.00               0.00            0.194           0
+  naive_topk_dedup    1000 25         975.36           997             0.975              0.00               0.00            0.248           0
+  naive_topk_dedup    2000 25        1974.40          1996             0.987              0.00               0.00            0.199           0
+  naive_topk_dedup    4000 25        3969.28          3996             0.992              0.00               0.00            0.236           0
+       rerank_topk     500 25         481.04           498             0.962          11676.80               0.00            0.576           0
+       rerank_topk    1000 25         976.60           999             0.977          11676.80               0.00            0.006           0
+       rerank_topk    2000 25        1976.40          1998             0.988          11676.80               0.00            0.011           0
+       rerank_topk    4000 25        3964.28          3996             0.991          11676.80               0.00            0.018           0
+  summarize_recomp     500 25         188.00           500             0.376          12679.20             188.96            2.419           0
+  summarize_recomp    1000 25         276.28          1000             0.276          13639.92             277.24            3.226           0
+  summarize_recomp    2000 25         358.16          2000             0.179          15571.28             359.12            3.956           0
+  summarize_recomp    4000 25         359.16          1386             0.090          19444.24             360.16            6.085           0
 ```
 
 ---
 
-## 2026-07-27 18:23 — Stage 07 power refresh
+## 2026-07-26 16:45 — Stage 05 sweep (primary+structured, limit=20)
 
 ```
- rq                               comparison  budget             test  observed_effect  n_assumed_synopsis  n_observed_effect                 formula  alpha  power  primary_comparison
-RQ1                rerank_topk vs naive_topk    1000 two_proportion_z           0.0467               170.0               7204  n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
-RQ1                rerank_topk vs naive_topk    1000    mcnemar_exact           1.7568               170.0               1199 discordant-pair formula   0.05    0.8                True
-RQ3               graph_select vs naive_topk    1000 two_proportion_z          -0.3578               356.0                123  n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
-RQ3               graph_select vs naive_topk    1000    mcnemar_exact           0.0909               356.0                 51 discordant-pair formula   0.05    0.8                True
-RQ4 graph_select: structured vs prose @ 1000    1000 two_proportion_z          -0.6240               564.0                 41  n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
+records: 980  |  actual spend this run: $0.48  |  31 min
+
+EM by arm x budget:
+budget               500    1000   2000   4000
+arm                                           
+compress_llmlingua  0.100  0.150  0.175  0.275
+graph_select        0.150  0.125  0.175  0.200
+graph_select_h1       NaN  0.250    NaN    NaN
+naive_topk          0.275  0.225  0.225  0.275
+naive_topk_dedup    0.275  0.225  0.225  0.275
+rerank_topk         0.250  0.250  0.275  0.250
+summarize_recomp    0.225  0.250  0.250  0.275
 ```
 
 ---
 
-## 2026-07-27 18:23 — Stage 08 summary
+## 2026-07-26 20:02 — Stage 05 sweep (primary+structured, limit=20)
+
+```
+records: 5620  |  actual spend this run: $0.00  |  0 min
+
+EM by arm x budget:
+budget               500    1000   2000   4000
+arm                                           
+compress_llmlingua  0.100  0.150  0.175  0.275
+graph_select        0.150  0.125  0.175  0.200
+graph_select_h1       NaN  0.250    NaN    NaN
+naive_topk          0.474  0.484  0.492  0.500
+naive_topk_dedup    0.275  0.225  0.225  0.275
+rerank_topk         0.500  0.505  0.516  0.511
+summarize_recomp    0.225  0.250  0.250  0.275
+```
+
+---
+
+## 2026-07-26 20:13 — Stage 05 sweep (primary+structured, limit=20)
+
+```
+records: 5620  |  actual spend this run: $0.00  |  0 min
+
+EM by arm x budget:
+budget               500    1000   2000   4000
+arm                                           
+compress_llmlingua  0.100  0.150  0.175  0.275
+graph_select        0.150  0.125  0.175  0.200
+graph_select_h1       NaN  0.250    NaN    NaN
+naive_topk          0.474  0.484  0.492  0.500
+naive_topk_dedup    0.275  0.225  0.225  0.275
+rerank_topk         0.500  0.505  0.516  0.511
+summarize_recomp    0.225  0.250  0.250  0.275
+```
+
+---
+
+## 2026-07-26 20:19 — Stage 05 sweep (primary+structured, limit=20)
+
+```
+records: 5620  |  actual spend this run: $0.00  |  0 min
+
+EM by arm x budget:
+budget               500    1000   2000   4000
+arm                                           
+compress_llmlingua  0.100  0.150  0.175  0.275
+graph_select        0.150  0.125  0.175  0.200
+graph_select_h1       NaN  0.250    NaN    NaN
+naive_topk          0.474  0.484  0.492  0.500
+naive_topk_dedup    0.275  0.225  0.225  0.275
+rerank_topk         0.500  0.505  0.516  0.511
+summarize_recomp    0.225  0.250  0.250  0.275
+```
+
+---
+
+## 2026-07-26 20:24 — Stage 05 sweep (primary+structured, limit=20)
+
+```
+records: 5620  |  actual spend this run: $0.00  |  0 min
+
+EM by arm x budget:
+budget               500    1000   2000   4000
+arm                                           
+compress_llmlingua  0.100  0.150  0.175  0.275
+graph_select        0.150  0.125  0.175  0.200
+graph_select_h1       NaN  0.250    NaN    NaN
+naive_topk          0.474  0.484  0.492  0.500
+naive_topk_dedup    0.275  0.225  0.225  0.275
+rerank_topk         0.500  0.505  0.516  0.511
+summarize_recomp    0.225  0.250  0.250  0.275
+```
+
+---
+
+## 2026-07-27 05:02 — Stage 05 sweep (primary+structured, limit=None)
+
+```
+records: 24600  |  actual spend this run: $8.78  |  518 min
+
+EM by arm x budget:
+budget             500    1000   2000   4000
+arm                                         
+graph_select      0.177  0.203  0.219  0.237
+graph_select_h1     NaN  0.330    NaN    NaN
+naive_topk        0.329  0.336  0.341  0.343
+naive_topk_dedup  0.327  0.336  0.341  0.343
+rerank_topk       0.360  0.360  0.364  0.364
+summarize_recomp  0.240  0.285  0.312  0.342
+```
+
+---
+
+## 2026-08-14 18:17 — Stage 05 sweep (primary+structured, limit=20)
+
+```
+records: 24760  |  actual spend this run: $0.00  |  0 min
+
+EM by arm x budget:
+budget               500    1000   2000   4000
+arm                                           
+compress_llmlingua  0.100  0.150  0.175  0.275
+graph_select        0.177  0.203  0.219  0.237
+graph_select_h1       NaN  0.330    NaN    NaN
+naive_topk          0.329  0.336  0.341  0.343
+naive_topk_dedup    0.327  0.336  0.341  0.343
+rerank_topk         0.360  0.360  0.364  0.364
+summarize_recomp    0.240  0.285  0.312  0.342
+```
+
+---
+
+## 2026-08-14 18:18 — Stage 05 sweep (primary+structured, limit=None)
+
+```
+records: 24600  |  actual spend this run: $0.00  |  0 min
+
+EM by arm x budget:
+budget             500    1000   2000   4000
+arm                                         
+graph_select      0.177  0.203  0.219  0.237
+graph_select_h1     NaN  0.330    NaN    NaN
+naive_topk        0.329  0.336  0.341  0.343
+naive_topk_dedup  0.327  0.336  0.341  0.343
+rerank_topk       0.360  0.360  0.364  0.364
+summarize_recomp  0.240  0.285  0.312  0.342
+```
+
+---
+
+## 2026-08-15 05:51 — Stage 05 sweep (primary+structured, limit=20)
+
+```
+records: 28240  |  actual spend this run: $0.00  |  0 min
+
+EM by arm x budget:
+budget               500    1000   2000   4000
+arm                                           
+compress_llmlingua  0.154  0.178  0.308  0.392
+graph_select        0.177  0.203  0.219  0.237
+graph_select_h1       NaN  0.330    NaN    NaN
+naive_topk          0.329  0.336  0.341  0.343
+naive_topk_dedup    0.327  0.336  0.341  0.343
+rerank_topk         0.360  0.360  0.364  0.364
+summarize_recomp    0.240  0.285  0.312  0.342
+```
+
+---
+
+## 2026-08-15 05:51 — Stage 05 sweep (primary+structured, limit=None)
+
+```
+records: 28200  |  actual spend this run: $0.00  |  0 min
+
+EM by arm x budget:
+budget               500    1000   2000   4000
+arm                                           
+compress_llmlingua  0.154  0.178  0.315  0.400
+graph_select        0.177  0.203  0.219  0.237
+graph_select_h1       NaN  0.330    NaN    NaN
+naive_topk          0.329  0.336  0.341  0.343
+naive_topk_dedup    0.327  0.336  0.341  0.343
+rerank_topk         0.360  0.360  0.364  0.364
+summarize_recomp    0.240  0.285  0.312  0.342
+```
+
+---
+
+## 2026-08-15 07:03 — Stage 05 sweep (primary+structured, limit=None)
+
+```
+records: 29400  |  actual spend this run: $0.83  |  71 min
+
+EM by arm x budget:
+budget               500    1000   2000   4000
+arm                                           
+compress_llmlingua  0.154  0.178  0.202  0.258
+graph_select        0.177  0.203  0.219  0.237
+graph_select_h1       NaN  0.330    NaN    NaN
+naive_topk          0.329  0.336  0.341  0.343
+naive_topk_dedup    0.327  0.336  0.341  0.343
+rerank_topk         0.360  0.360  0.364  0.364
+summarize_recomp    0.240  0.285  0.312  0.342
+```
+
+---
+
+## 2026-08-15 07:08 — Stage 04b baselines
+
+```
+                  em     f1  gen_context_tokens
+arm                                            
+full_context   0.507  0.654           11431.118
+gold_context   0.562  0.718             335.223
+no_context     0.300  0.399               0.000
+random_chunks  0.233  0.336             927.810
+```
+
+---
+
+## 2026-08-15 07:11 — Stage 04c position ablation
+
+arm=rerank_topk @ 1000 tokens
+```
+  position  em_mean  em_count  f1_mean  f1_count  faithfulness_mean  faithfulness_count
+0      end   0.5295       576   0.6774       576             0.9151                 576
+1   middle   0.5156       576   0.6634       576             0.8998                 576
+2    start   0.5365       576   0.6842       576             0.9259                 576
+```
+skipped: 0 no assembly, 24 no gold in selection, 0 BPE jitter.
+
+---
+
+## 2026-08-15 07:11 — Stage 06 analysis
+
+```
+results rows: 135; tests: 41 (34 significant after BH-FDR); figures written (300 dpi)
+```
+
+---
+
+## 2026-08-15 07:11 — Stage 07 power refresh
+
+```
+ rq                                              comparison budget             test  observed_effect  n_assumed_synopsis  n_observed_effect                                                       formula  alpha  power  primary_comparison
+RQ1                               rerank_topk vs naive_topk   1000 two_proportion_z           0.0467               170.0               7204                                        n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
+RQ1                               rerank_topk vs naive_topk   1000    mcnemar_exact           1.7568               170.0               1199                                       discordant-pair formula   0.05    0.8                True
+RQ3                              graph_select vs naive_topk   1000 two_proportion_z          -0.3578               356.0                123                                        n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
+RQ3                              graph_select vs naive_topk   1000    mcnemar_exact           0.0909               356.0                 51                                       discordant-pair formula   0.05    0.8                True
+RQ2 per-question F1-per-log2(budget) slope: multi vs single  slope          welch_t           0.2060                34.0                370 n per group = 2(z_a/2+z_b)^2/d^2 (two-sample t approximation)   0.05    0.8                True
+RQ4                graph_select: structured vs prose @ 1000   1000 two_proportion_z          -0.6240               564.0                 41                                        n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
+```
+
+---
+
+## 2026-08-15 07:11 — Stage 08 summary
 
 RESULTS_SUMMARY.md regenerated (with sweep records).
-
----
-
-## 2026-07-27 18:23 — Colab sweep 41/49 blocks complete; partial analysis generated for the Interim Report
-
-Colab compute exhausted before the LLMLingua blocks; everything else FINISHED
-at full scale (n=600/block, 0 failed records, 100% judge parse):
-- primary + structured sweeps for naive_topk, naive_topk_dedup, rerank_topk,
-  summarize_recomp, graph_select (40 blocks) + the hops=1 sensitivity block.
-- PENDING (~next week, GPU): 8 compress_llmlingua blocks, then 04b baselines,
-  04c position ablation, and a final re-run of 06/07/08 with all arms.
-- RQ2's slope test correctly self-skipped (requires all 5 arms per question;
-  disclosed in the analysis output) — it will compute after LLMLingua lands.
-
-Headline PRELIMINARY findings (24,600 records; BH-FDR corrected; full tables
-in outputs/):
-1. RQ1: rerank_topk is the best arm at every budget (EM 0.517-0.532 vs naive
-   0.487-0.513); the pre-registered primary contrast at 1,000 tokens shows a
-   consistent but SMALL effect (h = 0.047, McNemar discordant odds 1.76) —
-   real, modest, honest.
-2. Budgets show strong diminishing returns: naive gains only +2.6 EM points
-   from 500 -> 4000 tokens (8x cost). The Pareto story favors small budgets.
-3. RQ3 (the novel arm): **clear, well-powered NEGATIVE result** — graph_select
-   underperforms naive_topk by ~16-20 EM points at every budget (h = -0.358
-   at the primary budget; required n = 123, we have 600). The dedup control
-   matches naive almost exactly, so the deficit is the graph selection itself,
-   not deduplication; hops=1 vs 2 sensitivity shows the result is not a
-   hyperparameter artifact (0.330 vs 0.323). Pre-registration anticipated
-   exactly this disclosure path.
-4. RQ4: structured (WTQ) content is far harder for every arm (EM 0.07-0.20 vs
-   prose ~0.29-0.53); graph_select degrades most (h = -0.624 at 1,000).
-   Partly a retrieval effect (WTQ dense recall@50 = 0.733) — stratification
-   fields are in the records for the report to separate the two.
-5. Mean judged faithfulness 0.704 across 24,600 records.
-
-Spend to date ≈ $21.5 of the $23-26 ceiling (sweep mostly cached now; the
-remaining LLMLingua + baselines + ablation fit in the ceiling).
-
-outputs/ regenerated from the partial data and committed: all six figures,
-preliminary_results(.by_dataset).csv, stats_tests.csv (37 tests, 30
-significant post-FDR), sample_size_observed.csv, fig_power_curve.png,
-RESULTS_SUMMARY.md (pending items marked NOT RUN honestly). Note:
-budget_compliance.csv and judge_spot_check_sample.csv live in the Drive sync
-outputs/ folder from the Colab session — to be merged when convenient.

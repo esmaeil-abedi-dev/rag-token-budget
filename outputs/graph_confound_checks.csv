@@ -1,4 +1,8 @@
 check,arm,budget,value,detail
+budget_parity,compress_llmlingua,500,493.4,mean realized context tokens
+budget_parity,compress_llmlingua,1000,986.6,mean realized context tokens
+budget_parity,compress_llmlingua,2000,1964.0,mean realized context tokens
+budget_parity,compress_llmlingua,4000,3892.4,mean realized context tokens
 budget_parity,graph_select,500,480.6,mean realized context tokens
 budget_parity,graph_select,1000,975.2,mean realized context tokens
 budget_parity,graph_select,2000,1965.8,mean realized context tokens
@@ -19,6 +23,14 @@ budget_parity,summarize_recomp,500,174.4,mean realized context tokens
 budget_parity,summarize_recomp,1000,248.8,mean realized context tokens
 budget_parity,summarize_recomp,2000,307.2,mean realized context tokens
 budget_parity,summarize_recomp,4000,413.6,mean realized context tokens
+retrieval_stratification,compress_llmlingua,500,0.0,EM | gold_in_pool=False (n=4)
+retrieval_stratification,compress_llmlingua,500,0.2416,EM | gold_in_pool=True (n=596)
+retrieval_stratification,compress_llmlingua,1000,0.0,EM | gold_in_pool=False (n=4)
+retrieval_stratification,compress_llmlingua,1000,0.2802,EM | gold_in_pool=True (n=596)
+retrieval_stratification,compress_llmlingua,2000,0.0,EM | gold_in_pool=False (n=4)
+retrieval_stratification,compress_llmlingua,2000,0.3171,EM | gold_in_pool=True (n=596)
+retrieval_stratification,compress_llmlingua,4000,0.0,EM | gold_in_pool=False (n=4)
+retrieval_stratification,compress_llmlingua,4000,0.4027,EM | gold_in_pool=True (n=596)
 retrieval_stratification,graph_select,500,0.0,EM | gold_in_pool=False (n=4)
 retrieval_stratification,graph_select,500,0.2886,EM | gold_in_pool=True (n=596)
 retrieval_stratification,graph_select,1000,0.0,EM | gold_in_pool=False (n=4)
