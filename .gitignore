@@ -31,3 +31,4 @@ venv/
 
 # --- colab transfer bundle (large, regenerable) ---
 colab_bundle.zip
+spot_check_review.html
