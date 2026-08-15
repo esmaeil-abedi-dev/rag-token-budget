@@ -1139,3 +1139,33 @@ context lookup failed silently. Fixes:
    sample under-represents that arm (1/50; disclosed). LLMLingua contexts
    reproduced token-identically on MPS (9/50 verified).
 Human verdicts still pending; agreement rate lands in RESULTS_SUMMARY after.
+
+---
+
+## 2026-08-15 13:25 — Stage 08 summary
+
+RESULTS_SUMMARY.md regenerated (with sweep records).
+
+---
+
+## 2026-08-15 — Human judge verification COMPLETE (84% agreement)
+
+The human gate promised in the Synopsis is done: all 50 spot-check rows
+hand-scored in spot_check_review.html and merged into
+outputs/judge_spot_check_sample.csv (human_faithfulness, human_agrees).
+
+Result: **42/50 = 84% human-judge agreement** (predicted 84-86% from the
+pre-assessment pass). human_faithfulness distribution: 31x 1, 16x 0, 3x 0.5.
+
+The 8 disagreements (#2, #14, #23, #24, #26, #33, #48, #50) match the
+pre-assessed judge-miss list; the pattern is consistent: the judge
+(gpt-4o-mini) is unreliable on (a) abstention handling — sometimes crediting,
+sometimes zeroing "not in context" answers — and (b) WTQ table-position /
+counting questions, where it over-credits topically-associated entities
+(e.g. #33: "The Netherlands" scored 1.0 for a previous-row question with no
+table in context). Two borderline rows kept as 0.5 with agree=yes (#6, #44).
+
+Stage 08 re-run (free, no API calls): RESULTS_SUMMARY.md now reports the
+agreement rate under "Judge spot-check". This closes the last unmet
+Synopsis promise; faithfulness conclusions carry an ~16% judge-noise caveat,
+concentrated in the structured (WTQ) sweep.

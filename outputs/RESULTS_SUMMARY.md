@@ -596,7 +596,7 @@ Hyperparameter sensitivity (hops=1 vs hops=2):
 | structured/tables |     4000 | rerank_topk |     0.202 |                0.01  |
 Caveats the guide inherits (stated wherever it is quoted): the RQ1 margin is small and not significant at the pre-registered budget — 'best' rows with a margin under ~0.02 EM should be read as 'tied with naive top-k'; returns to budget are strongly diminishing, so the cheapest budget meeting the accuracy need is usually the right choice; graph_select and compress_llmlingua are dominated at every budget in this configuration.
 ## Judge spot-check (Synopsis-promised hand verification)
-Sample of 50 judgements written to judge_spot_check_sample.csv — **human verification pending** (fill human_faithfulness / human_agrees).
+Human-judge agreement: 84% on 50 hand-verified judgements.
 ## Failures, skips, and substitutions (complete list)
 - pgvector unavailable in this environment (SKIP_PGVECTOR=1, e.g. Colab); vectors persisted as embeddings.npy only; retrieval unchanged (exact in-memory cosine)
 - Known method caveats (disclosed by design): LLMLingua-2 compression is question-agnostic (the published method); LiveRAG gold answers are long-form so its EM is unreliable (F1/faithfulness used); RQ4 is unpaired and content type is confounded with dataset; RQ1's 'best arm' is max-selected on the test data (winner's-curse caveat attached to its p-values); per-dataset splits are exploratory; MultiHop-RAG evaluation questions come from its only published split (train); pgvector persists vectors while query-time retrieval uses exact cosine over the same vectors (removes ANN variance).
