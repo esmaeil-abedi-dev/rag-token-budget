@@ -281,12 +281,22 @@ def main():
             return (a or {}).get("text", "")
 
         sample["context"] = sample.apply(ctx_full, axis=1)
-        sample["human_faithfulness"] = ""  # to be filled by hand
-        sample["human_agrees"] = ""        # yes/no, to be filled by hand
-        sample[["question_id", "sweep", "arm", "budget", "context",
-                "predicted_answer", "gold_answer", "em", "f1", "faithfulness",
-                "answer_relevance", "human_faithfulness", "human_agrees"]].to_csv(
-            spot_path, index=False)
+        n_empty = int((sample["context"].str.strip() == "").sum())
+        if n_empty:
+            # a context-less spot check is unverifiable — fail LOUDLY, never
+            # write a silently useless file (this happened once: a WAL-truncated
+            # cache restore emptied the assembled table)
+            print(f"[05] WARNING: {n_empty}/{len(sample)} spot-check contexts missing "
+                  f"from the assembled cache — NOT writing the sample; rebuild the "
+                  f"cache or use the deterministic reconstruction path")
+            sample = sample.iloc[0:0]
+        if len(sample):
+            sample["human_faithfulness"] = ""  # to be filled by hand
+            sample["human_agrees"] = ""        # yes/no, to be filled by hand
+            sample[["question_id", "sweep", "arm", "budget", "context",
+                    "predicted_answer", "gold_answer", "em", "f1", "faithfulness",
+                    "answer_relevance", "human_faithfulness", "human_agrees"]].to_csv(
+                spot_path, index=False)
 
     elapsed = (time.time() - t_start) / 60
     summary = (f"records: {len(all_df)}  |  actual spend this run: ${spent:.2f}  |  "

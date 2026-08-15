@@ -1120,3 +1120,22 @@ RESULTS_SUMMARY.md regenerated (with sweep records).
    segment x budget with margins, carrying the RQ1 small-margin caveat).
 
 eval_records now 30,000 records (50 blocks), 0 failed.
+
+---
+
+## 2026-08-15 — Spot-check sample rebuilt with VERIFIED contexts
+
+User review caught that judge_spot_check_sample.csv had EMPTY contexts for all
+50 rows: it was regenerated during the Colab repair session, whose restored
+cache.db was the WAL-truncated Drive copy (assembled table empty), and the
+context lookup failed silently. Fixes:
+1. 05 now refuses to write a spot-check sample with missing contexts (loud
+   warning; empty file never clobbers a good one).
+2. Sample rebuilt locally: 50 seeded rows with contexts DETERMINISTICALLY
+   reconstructed and each VERIFIED by exact token-count match against the
+   original record's gen_context_tokens (identical pipeline + equal count).
+   6 candidates replaced for mismatch/failure — mostly summarize_recomp,
+   whose LLM-written summaries cannot be re-verified byte-exact, so the
+   sample under-represents that arm (1/50; disclosed). LLMLingua contexts
+   reproduced token-identically on MPS (9/50 verified).
+Human verdicts still pending; agreement rate lands in RESULTS_SUMMARY after.
