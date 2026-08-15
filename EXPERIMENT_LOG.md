@@ -1021,3 +1021,28 @@ RQ4                graph_select: structured vs prose @ 1000   1000 two_proportio
 ## 2026-08-15 07:22 — Stage 08 summary
 
 RESULTS_SUMMARY.md regenerated (with sweep records).
+
+---
+
+## 2026-08-15 — Repair session verified; full data merged to the local repo
+
+Read all 21 executed notebook cells of the repair run: cells 1-14 replayed at
+$0; 04b's coverage gate refused the skip and re-ran cleanly (warm-up fix
+worked — zero failed records). **gold_context ceiling is now n=600: EM 0.565,
+F1 0.721** (was 0.562 on n=589). 04c correctly skipped; 06/07/08 regenerated;
+pushed. Cosmetic nit noted: 04b's re-run message prints unique-question count
+("600 < 600") while the check is per-condition coverage.
+
+Merged from the Drive sync into the local repo: eval_records (29,400 records,
+0 failed), baseline_records (2,400, 0 failed), position_records (1,728), all
+49 full checkpoints, manifest. The synced cache.db arrived MALFORMED (SQLite
+WAL synced mid-write without its -wal sidecar — a known hazard of file-copy
+backups of live SQLite). `.recover` salvaged the full emb table (74,156
+vectors); the generation/judge/assembled caches from the Colab sessions are
+lost in this copy. No result is affected — results live in checkpoints — but
+future re-generation would re-pay. Lesson recorded: sync SQLite only after
+`PRAGMA wal_checkpoint(TRUNCATE)` or via the sqlite backup API.
+
+STUDY DATA NOW FULLY LOCAL AND VERIFIED. Outstanding: (1) 50 hand verdicts in
+outputs/judge_spot_check_sample.csv -> rerun 08 for the agreement rate;
+(2) update the Interim Report docx with final numbers.
