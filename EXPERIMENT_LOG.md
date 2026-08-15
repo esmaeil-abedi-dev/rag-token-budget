@@ -926,28 +926,98 @@ RESULTS_SUMMARY.md regenerated (with sweep records).
 
 ---
 
-## 2026-08-15 — STUDY COMPLETE: all 49 blocks + baselines + ablation verified locally
+## 2026-08-15 07:21 — Stage 05 sweep (primary+structured, limit=20)
 
-Pulled the Colab final run and re-verified every deliverable against the
-artifacts. Zero budget violations (measured, all 24 arm x budget cells).
-Final headline findings, now with all five arms:
+```
+records: 29400  |  actual spend this run: $0.00  |  0 min
 
-1. rerank_topk best at every budget (peak EM 0.532 @ 2000); LLMLingua is the
-   weakest at tight budgets (0.240 @ 500) but climbs fastest (0.400 @ 4000).
-2. **More context hurts**: full_context (~11.5k tokens) scores EM 0.507 —
-   BELOW rerank@2000 (0.532) at 5.6x the tokens. Floor (no_context) 0.300,
-   ceiling (gold_context) 0.562 -> rerank@2000 captures ~89% of the
-   floor-to-ceiling gap on ~2k tokens.
-3. Lost-in-the-middle REPLICATED on our own pipeline: EM start 0.537 >
-   end 0.530 > middle 0.516 (n=576, evidence set held constant).
-4. RQ2 now computed: multi-hop gains significantly more from budget than
-   single-hop (slope contrast d=0.206, p=.012 after FDR); within-hop budget
-   effect d_z ~ 0.53 in both groups.
-5. APT ranking CHANGES between generator-only and total accounting — the
-   pre-identified metric bias is real and material (headline finding).
-6. Graph-arm negative result unchanged and confound-checked; hops sensitivity
-   null (p=.50).
+EM by arm x budget:
+budget               500    1000   2000   4000
+arm                                           
+compress_llmlingua  0.154  0.178  0.202  0.258
+graph_select        0.177  0.203  0.219  0.237
+graph_select_h1       NaN  0.330    NaN    NaN
+naive_topk          0.329  0.336  0.341  0.343
+naive_topk_dedup    0.327  0.336  0.341  0.343
+rerank_topk         0.360  0.360  0.364  0.364
+summarize_recomp    0.240  0.285  0.312  0.342
+```
 
-OUTSTANDING (user action): outputs/judge_spot_check_sample.csv has 50 rows
-awaiting hand verdicts (human_agrees column) for the Synopsis-promised
-judge-agreement rate; then re-run 08 to fold the rate into RESULTS_SUMMARY.
+---
+
+## 2026-08-15 07:21 — Stage 05 sweep (primary+structured, limit=None)
+
+```
+records: 29400  |  actual spend this run: $0.00  |  0 min
+
+EM by arm x budget:
+budget               500    1000   2000   4000
+arm                                           
+compress_llmlingua  0.154  0.178  0.202  0.258
+graph_select        0.177  0.203  0.219  0.237
+graph_select_h1       NaN  0.330    NaN    NaN
+naive_topk          0.329  0.336  0.341  0.343
+naive_topk_dedup    0.327  0.336  0.341  0.343
+rerank_topk         0.360  0.360  0.364  0.364
+summarize_recomp    0.240  0.285  0.312  0.342
+```
+
+---
+
+## 2026-08-15 07:21 — Stage 05 sweep (primary+structured, limit=None)
+
+```
+records: 29400  |  actual spend this run: $0.00  |  0 min
+
+EM by arm x budget:
+budget               500    1000   2000   4000
+arm                                           
+compress_llmlingua  0.154  0.178  0.202  0.258
+graph_select        0.177  0.203  0.219  0.237
+graph_select_h1       NaN  0.330    NaN    NaN
+naive_topk          0.329  0.336  0.341  0.343
+naive_topk_dedup    0.327  0.336  0.341  0.343
+rerank_topk         0.360  0.360  0.364  0.364
+summarize_recomp    0.240  0.285  0.312  0.342
+```
+
+---
+
+## 2026-08-15 07:22 — Stage 04b baselines
+
+```
+                  em     f1  gen_context_tokens
+arm                                            
+full_context   0.507  0.654           11431.118
+gold_context   0.565  0.721             340.153
+no_context     0.300  0.399               0.000
+random_chunks  0.233  0.336             927.810
+```
+
+---
+
+## 2026-08-15 07:22 — Stage 06 analysis
+
+```
+results rows: 135; tests: 41 (34 significant after BH-FDR); figures written (300 dpi)
+```
+
+---
+
+## 2026-08-15 07:22 — Stage 07 power refresh
+
+```
+ rq                                              comparison budget             test  observed_effect  n_assumed_synopsis  n_observed_effect                                                       formula  alpha  power  primary_comparison
+RQ1                               rerank_topk vs naive_topk   1000 two_proportion_z           0.0467               170.0               7204                                        n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
+RQ1                               rerank_topk vs naive_topk   1000    mcnemar_exact           1.7568               170.0               1199                                       discordant-pair formula   0.05    0.8                True
+RQ3                              graph_select vs naive_topk   1000 two_proportion_z          -0.3578               356.0                123                                        n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
+RQ3                              graph_select vs naive_topk   1000    mcnemar_exact           0.0909               356.0                 51                                       discordant-pair formula   0.05    0.8                True
+RQ2 per-question F1-per-log2(budget) slope: multi vs single  slope          welch_t           0.2060                34.0                370 n per group = 2(z_a/2+z_b)^2/d^2 (two-sample t approximation)   0.05    0.8                True
+RQ4                graph_select: structured vs prose @ 1000   1000 two_proportion_z          -0.6240               564.0                 41                                        n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
+```
+
+---
+
+## 2026-08-15 07:22 — Stage 08 summary
+
+RESULTS_SUMMARY.md regenerated (with sweep records).
