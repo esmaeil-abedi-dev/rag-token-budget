@@ -1,0 +1,5 @@
+group,scope,n,em,f1,faithfulness,answer_relevance
+older_benchmarks,all,7500,0.3796,0.5281,0.7456,0.7847
+older_benchmarks,gold_in_pool_only,7420,0.3837,0.5332,0.7499,0.7889
+liverag_post_cutoff,all,1500,0.008,0.2469,0.8074,0.8279
+liverag_post_cutoff,gold_in_pool_only,1500,0.008,0.2469,0.8074,0.8279

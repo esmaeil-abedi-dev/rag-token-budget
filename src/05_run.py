@@ -180,16 +180,22 @@ def main():
                       f"EM={df['em'].mean():.3f} F1={df['f1'].mean():.3f}  "
                       f"${block_cost:.3f}  {time.time()-t0:.0f}s  (total ${spent:.2f})")
 
-    # graph sensitivity: hops=1 at the 1000 budget (the brief's hyperparameter
-    # run). Distinct arm_label + arm_kwargs give it its own assembly-cache keys
-    # — it can NEVER silently reuse the hops=2 contexts.
+    # graph sensitivity: hyperparameter variants at the 1000 budget (expansion
+    # hops AND the relevance/centrality weight alpha — instructor feedback asked
+    # for wider exploration). Distinct arm_labels + arm_kwargs give each variant
+    # its own assembly-cache keys — never reusing the hops=2/alpha=0.7 contexts.
+    SENSITIVITY_VARIANTS = [
+        ("sensitivity_h1", "graph_select_h1", {"hops": 1}),
+        ("sensitivity_a05", "graph_select_a05", {"alpha": 0.5}),
+    ]
     if (not args.skip_sensitivity and "primary" in sweeps and q_primary
         and "graph_select" in run_arms):
-        df = run_block(q_primary, sweep="sensitivity_h1", arm="graph_select",
-                       budget=1000, ctx=ctx, workers=args.workers, force=args.force,
-                       arm_label="graph_select_h1", arm_kwargs={"hops": 1})
-        spent += uncached_cost(df)
-        print(f"[05] sensitivity graph hops=1 b=1000 n={len(df)} EM={df['em'].mean():.3f}")
+        for sweep_name, label, kwargs in SENSITIVITY_VARIANTS:
+            df = run_block(q_primary, sweep=sweep_name, arm="graph_select",
+                           budget=1000, ctx=ctx, workers=args.workers, force=args.force,
+                           arm_label=label, arm_kwargs=kwargs)
+            spent += uncached_cost(df)
+            print(f"[05] sensitivity {label} b=1000 n={len(df)} EM={df['em'].mean():.3f}")
 
     # Rebuild eval_records from checkpoints on disk (so a later restricted run
     # can never clobber earlier sweeps out of the file) — but with a coverage
@@ -200,17 +206,19 @@ def main():
         "structured": set(pd.read_parquet(DATA / "questions_structured_clean.parquet")["question_id"]),
     }
     full_ids["sensitivity_h1"] = full_ids["primary"]
+    full_ids["sensitivity_a05"] = full_ids["primary"]
     # under --limit / --tier1-only, THIS run's reduced sets are the expectation
     # — but ONLY for sweeps this run actually executed. A sweep not executed
     # here keeps the FULL expectation: an empty this-run set would satisfy
     # `set() <= anything` and wave stale smoke checkpoints straight through.
+    sens_ids = ({q["question_id"] for q in q_primary}
+                if not args.skip_sensitivity else set())
     this_run_ids = {"primary": {q["question_id"] for q in q_primary},
                     "structured": {q["question_id"] for q in q_structured},
-                    "sensitivity_h1": ({q["question_id"] for q in q_primary}
-                                       if not args.skip_sensitivity else set())}
+                    "sensitivity_h1": sens_ids, "sensitivity_a05": sens_ids}
     executed = {s for s in ("primary", "structured") if s in sweeps and this_run_ids[s]}
-    if not args.skip_sensitivity and "primary" in executed:
-        executed.add("sensitivity_h1")
+    if not args.skip_sensitivity and "primary" in executed and "graph_select" in run_arms:
+        executed.update({"sensitivity_h1", "sensitivity_a05"})
     reduced = bool(args.limit or args.tier1_only)
 
     from runner import corpus_fingerprint

@@ -1046,3 +1046,77 @@ future re-generation would re-pay. Lesson recorded: sync SQLite only after
 STUDY DATA NOW FULLY LOCAL AND VERIFIED. Outstanding: (1) 50 hand verdicts in
 outputs/judge_spot_check_sample.csv -> rerun 08 for the agreement rate;
 (2) update the Interim Report docx with final numbers.
+
+---
+
+## 2026-08-15 10:05 — Stage 05 sweep (primary, limit=None)
+
+```
+records: 30000  |  actual spend this run: $0.17  |  2 min
+
+EM by arm x budget:
+budget               500    1000   2000   4000
+arm                                           
+compress_llmlingua  0.154  0.178  0.202  0.258
+graph_select        0.177  0.203  0.219  0.237
+graph_select_a05      NaN  0.293    NaN    NaN
+graph_select_h1       NaN  0.330    NaN    NaN
+naive_topk          0.329  0.336  0.341  0.343
+naive_topk_dedup    0.327  0.336  0.341  0.343
+rerank_topk         0.360  0.360  0.364  0.364
+summarize_recomp    0.240  0.285  0.312  0.342
+```
+
+---
+
+## 2026-08-15 10:06 — Stage 06 analysis
+
+```
+results rows: 138; tests: 42 (35 significant after BH-FDR); figures written (300 dpi)
+```
+
+---
+
+## 2026-08-15 10:06 — Stage 07 power refresh
+
+```
+ rq                                              comparison budget             test  observed_effect  n_assumed_synopsis  n_observed_effect                                                       formula  alpha  power  primary_comparison
+RQ1                               rerank_topk vs naive_topk   1000 two_proportion_z           0.0467               170.0               7204                                        n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
+RQ1                               rerank_topk vs naive_topk   1000    mcnemar_exact           1.7568               170.0               1199                                       discordant-pair formula   0.05    0.8                True
+RQ3                              graph_select vs naive_topk   1000 two_proportion_z          -0.3578               356.0                123                                        n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
+RQ3                              graph_select vs naive_topk   1000    mcnemar_exact           0.0909               356.0                 51                                       discordant-pair formula   0.05    0.8                True
+RQ2 per-question F1-per-log2(budget) slope: multi vs single  slope          welch_t           0.2060                34.0                370 n per group = 2(z_a/2+z_b)^2/d^2 (two-sample t approximation)   0.05    0.8                True
+RQ4                graph_select: structured vs prose @ 1000   1000 two_proportion_z          -0.6240               564.0                 41                                        n = 2(z_a/2+z_b)^2/h^2   0.05    0.8                True
+```
+
+---
+
+## 2026-08-15 10:06 — Stage 08 summary
+
+RESULTS_SUMMARY.md regenerated (with sweep records).
+
+---
+
+## 2026-08-15 — Instructor-feedback coding items implemented (alpha run ~$0.30)
+
+1. **RQ4 retrieval-vs-assembly decomposition** (outputs/rq4_decomposition.csv):
+   at matched retrieval the structured penalty barely shrinks — retrieval
+   share is only 0.02-0.05 EM of a ~0.32 gap. The structured-content penalty
+   is predominantly an ASSEMBLY/GENERATION effect, not the WTQ retrieval
+   weakness previously flagged as a possible confound.
+2. **LiveRAG contamination investigated** (outputs/contamination_check.csv):
+   at matched retrieval (gold_in_pool both sides), older benchmarks EM 0.384 /
+   F1 0.533 vs LiveRAG 0.008 / 0.247 — but LiveRAG faithfulness is HIGHER
+   (0.807 vs 0.750). Post-cutoff the generator still grounds answers the judge
+   accepts; the EM/F1 collapse is largely the long-form-gold metric artifact.
+   Residual memorization inflating older-benchmark EM cannot be excluded, but
+   "capability collapse on unseen data" is ruled out.
+3. **Graph alpha sensitivity** (new sensitivity_a05 sweep, 600 records):
+   alpha=0.5 EM 0.293 vs primary alpha=0.7 0.323 (McNemar odds 2.16, p=.013)
+   vs hops=1 0.330 (null). The arm is sensitive to the relevance weight,
+   insensitive to expansion depth, and dominated by naive top-k under every
+   configuration probed — the negative result is not a tuning artifact.
+4. **Practitioner decision guide** added to RESULTS_SUMMARY (winner by
+   segment x budget with margins, carrying the RQ1 small-margin caveat).
+
+eval_records now 30,000 records (50 blocks), 0 failed.

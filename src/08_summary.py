@@ -137,8 +137,26 @@ def main():
           "Content type is confounded with dataset — stated, not hidden.")
     else:
         p("_NOT RUN_")
+    h(3, "RQ4 decomposition: retrieval share vs assembly share of the penalty")
+    rq4d = load(OUTPUTS / "rq4_decomposition.csv")
+    if rq4d is not None:
+        table(rq4d, max_rows=40)
+        p("Reading: `gap_total` is the full structured-vs-prose EM penalty; "
+          "`gap_assembly_matched_retrieval` recomputes it only on questions whose gold "
+          "evidence WAS in the retrieved pool on both sides (retrieval succeeded), so it "
+          "isolates assembly+generation; `gap_retrieval_share` is the remainder "
+          "attributable to retrieval failure on tables.")
+    else:
+        p("_not computed_")
 
     h(2, "9. Contamination check — older benchmarks vs LiveRAG (post-cutoff)")
+    cont = load(OUTPUTS / "contamination_check.csv")
+    if cont is not None:
+        p("At MATCHED retrieval quality (gold_in_pool_only rows, both groups): if older-"
+          "benchmark scores stay far above LiveRAG's even when retrieval succeeded "
+          "equally, memorization of the older benchmarks is the leading explanation — "
+          "capability and retrieval are controlled.")
+        table(cont)
     if ev is not None:
         prim = ev[ev.sweep == "primary"]
         old = prim[prim.dataset.isin(["hotpotqa", "squad_v2", "nq_open_gold", "ms_marco"])]
@@ -218,6 +236,34 @@ def main():
         if len(sens_rows):
             p("Hyperparameter sensitivity (hops=1 vs hops=2):")
             table(sens_rows)
+
+    h(2, "Practitioner decision guide (preliminary)")
+    if ev is not None and len(ev):
+        segs = []
+        prim_ok = ev[(ev.sweep == "primary")]
+        for seg_name, g in [("pooled prose", prim_ok),
+                            ("multi-hop", prim_ok[prim_ok.hop_type == "multi"]),
+                            ("single-hop", prim_ok[prim_ok.hop_type == "single"]),
+                            ("structured/tables", ev[ev.sweep == "structured"])]:
+            for b in sorted(g.budget.unique()):
+                gb = g[g.budget == b]
+                by = gb.groupby("arm")["em"].mean()
+                if not len(by):
+                    continue
+                best = by.idxmax()
+                second = by.drop(best).max() if len(by) > 1 else float("nan")
+                segs.append(dict(segment=seg_name, budget=b, best_arm=best,
+                                 best_em=round(by.max(), 3),
+                                 margin_over_second=round(by.max() - second, 3)))
+        table(pd.DataFrame(segs), max_rows=40)
+        p("Caveats the guide inherits (stated wherever it is quoted): the RQ1 margin is "
+          "small and not significant at the pre-registered budget — 'best' rows with a "
+          "margin under ~0.02 EM should be read as 'tied with naive top-k'; returns to "
+          "budget are strongly diminishing, so the cheapest budget meeting the accuracy "
+          "need is usually the right choice; graph_select and compress_llmlingua are "
+          "dominated at every budget in this configuration.")
+    else:
+        p("_NOT RUN_")
 
     h(2, "Judge spot-check (Synopsis-promised hand verification)")
     spot = load(OUTPUTS / "judge_spot_check_sample.csv")

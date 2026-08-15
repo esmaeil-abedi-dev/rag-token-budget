@@ -391,19 +391,25 @@ def run_tests(df: pd.DataFrame) -> list[dict]:
                 "discordant_odds_haldane", discordant_odds(mc),
                 n=len(m), primary=(budget == PRIMARY_BUDGET and other == "naive_topk"))
 
-    # Sensitivity disclosure: graph hops=1 vs hops=2 at the 1000 budget
-    sens = df[(df.sweep == "sensitivity_h1") & (df.budget == PRIMARY_BUDGET)
-              & (df.arm == "graph_select_h1")]
-    if len(sens):
+    # Sensitivity disclosure: graph hyperparameter variants vs the primary
+    # configuration (hops=2, alpha=0.7) at the 1000 budget
+    for sweep_name, label, desc in [
+        ("sensitivity_h1", "graph_select_h1", "hops=2 vs hops=1"),
+        ("sensitivity_a05", "graph_select_a05", "alpha=0.7 vs alpha=0.5"),
+    ]:
+        sens = df[(df.sweep == sweep_name) & (df.budget == PRIMARY_BUDGET)
+                  & (df.arm == label)]
+        if not len(sens):
+            continue
         both = prim[(prim.arm == "graph_select") & (prim.budget == PRIMARY_BUDGET)][
             ["question_id", "em", "f1"]].merge(
             sens[["question_id", "em", "f1"]], on="question_id", suffixes=("_a", "_b"))
         if len(both):
             mc = mcnemar_exact(both)
-            add("SENSITIVITY", "graph_select hops=2 vs hops=1", "mcnemar_exact",
+            add("SENSITIVITY", f"graph_select {desc}", "mcnemar_exact",
                 PRIMARY_BUDGET, mc, "discordant_odds_haldane", discordant_odds(mc),
                 n=len(both),
-                note="pre-registered hyperparameter sensitivity run, disclosed not tested")
+                note="hyperparameter sensitivity run, disclosed not tested")
 
     # RQ2: budget slope, single vs multi. UNIT OF ANALYSIS = THE QUESTION
     # (review round 1: per-(question x arm) slopes are 5x pseudo-replicated).
@@ -501,6 +507,61 @@ def run_tests(df: pd.DataFrame) -> list[dict]:
     return rows
 
 
+def rq4_decomposition(df: pd.DataFrame) -> pd.DataFrame:
+    """Split the structured-content penalty into RETRIEVAL vs ASSEMBLY parts
+    (instructor feedback): compare structured-vs-prose gaps overall vs within
+    the gold-in-pool=True subset. Within that subset, retrieval succeeded on
+    both sides, so the residual gap is attributable to assembly + generation;
+    the difference from the overall gap is the retrieval share."""
+    out = []
+    prose = df[(df.sweep == "primary") & (df.content_type == "prose")]
+    struct = df[df.sweep == "structured"]
+    for arm in SYNOPSIS_ARMS:
+        for budget in BUDGETS:
+            p_all = prose[(prose.arm == arm) & (prose.budget == budget)]
+            s_all = struct[(struct.arm == arm) & (struct.budget == budget)]
+            if not len(p_all) or not len(s_all):
+                continue
+            p_ok = p_all[p_all.retrieval_gold_in_pool]
+            s_ok = s_all[s_all.retrieval_gold_in_pool]
+            gap_total = p_all.em.mean() - s_all.em.mean()
+            gap_assembly = (p_ok.em.mean() - s_ok.em.mean()) if len(s_ok) else float("nan")
+            out.append(dict(
+                arm=arm, budget=budget,
+                prose_em=round(p_all.em.mean(), 4),
+                structured_em=round(s_all.em.mean(), 4),
+                prose_em_gold_in_pool=round(p_ok.em.mean(), 4),
+                structured_em_gold_in_pool=round(s_ok.em.mean(), 4) if len(s_ok) else None,
+                n_structured_gold_in_pool=len(s_ok),
+                pct_structured_gold_in_pool=round(s_all.retrieval_gold_in_pool.mean(), 4),
+                gap_total=round(gap_total, 4),
+                gap_assembly_matched_retrieval=round(gap_assembly, 4),
+                gap_retrieval_share=round(gap_total - gap_assembly, 4),
+            ))
+    return pd.DataFrame(out)
+
+
+def contamination_check(df: pd.DataFrame) -> pd.DataFrame:
+    """Older (pre-cutoff, widely trained-on) benchmarks vs LiveRAG
+    (post-cutoff), at MATCHED retrieval quality (gold_in_pool=True both sides)
+    and unrestricted — the memorization-vs-capability comparison the feedback
+    asked to investigate. EM is included but unreliable for LiveRAG (long-form
+    golds); F1 and judged faithfulness carry the comparison."""
+    prim = df[(df.sweep == "primary") & (df.arm.isin(SYNOPSIS_ARMS))]
+    older = prim[prim.dataset.isin(["hotpotqa", "squad_v2", "nq_open_gold", "ms_marco"])]
+    live = prim[prim.dataset == "liverag"]
+    out = []
+    for label, g in (("older_benchmarks", older), ("liverag_post_cutoff", live)):
+        for scope, gg in (("all", g), ("gold_in_pool_only", g[g.retrieval_gold_in_pool])):
+            out.append(dict(
+                group=label, scope=scope, n=len(gg),
+                em=round(gg.em.mean(), 4), f1=round(gg.f1.mean(), 4),
+                faithfulness=round(gg.faithfulness.mean(), 4),
+                answer_relevance=round(gg.answer_relevance.mean(), 4),
+            ))
+    return pd.DataFrame(out)
+
+
 def confound_checks(df: pd.DataFrame) -> pd.DataFrame:
     prim = df[df.sweep == "primary"]
     out = []
@@ -523,9 +584,9 @@ def main():
     if not ev_path.exists():
         raise SystemExit("[06] data/eval_records.parquet missing — run src/05_run.py first")
     df = pd.read_parquet(ev_path)
-    # sensitivity_h1 stays in: its rows appear in preliminary_results and the
-    # SENSITIVITY test row — the pre-registered disclosure must surface
-    df = df[df.sweep.isin(["primary", "structured", "sensitivity_h1"])]
+    # sensitivity sweeps stay in: their rows appear in preliminary_results and
+    # the SENSITIVITY test rows — the pre-registered disclosure must surface
+    df = df[df.sweep.isin(["primary", "structured", "sensitivity_h1", "sensitivity_a05"])]
     if "failed" in df.columns:
         n_failed = int(df["failed"].sum())
         if n_failed:
@@ -568,6 +629,8 @@ def main():
 
     cc = confound_checks(df)
     cc.to_csv(OUTPUTS / "graph_confound_checks.csv", index=False)
+    rq4_decomposition(df).to_csv(OUTPUTS / "rq4_decomposition.csv", index=False)
+    contamination_check(df).to_csv(OUTPUTS / "contamination_check.csv", index=False)
 
     n_sig = int((tdf["p_adj"] < 0.05).sum())
     summary = (f"results rows: {len(res)}; tests: {len(tdf)} "
