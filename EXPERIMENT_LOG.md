@@ -923,3 +923,31 @@ RQ4                graph_select: structured vs prose @ 1000   1000 two_proportio
 ## 2026-08-15 07:11 — Stage 08 summary
 
 RESULTS_SUMMARY.md regenerated (with sweep records).
+
+---
+
+## 2026-08-15 — STUDY COMPLETE: all 49 blocks + baselines + ablation verified locally
+
+Pulled the Colab final run and re-verified every deliverable against the
+artifacts. Zero budget violations (measured, all 24 arm x budget cells).
+Final headline findings, now with all five arms:
+
+1. rerank_topk best at every budget (peak EM 0.532 @ 2000); LLMLingua is the
+   weakest at tight budgets (0.240 @ 500) but climbs fastest (0.400 @ 4000).
+2. **More context hurts**: full_context (~11.5k tokens) scores EM 0.507 —
+   BELOW rerank@2000 (0.532) at 5.6x the tokens. Floor (no_context) 0.300,
+   ceiling (gold_context) 0.562 -> rerank@2000 captures ~89% of the
+   floor-to-ceiling gap on ~2k tokens.
+3. Lost-in-the-middle REPLICATED on our own pipeline: EM start 0.537 >
+   end 0.530 > middle 0.516 (n=576, evidence set held constant).
+4. RQ2 now computed: multi-hop gains significantly more from budget than
+   single-hop (slope contrast d=0.206, p=.012 after FDR); within-hop budget
+   effect d_z ~ 0.53 in both groups.
+5. APT ranking CHANGES between generator-only and total accounting — the
+   pre-identified metric bias is real and material (headline finding).
+6. Graph-arm negative result unchanged and confound-checked; hops sensitivity
+   null (p=.50).
+
+OUTSTANDING (user action): outputs/judge_spot_check_sample.csv has 50 rows
+awaiting hand verdicts (human_agrees column) for the Synopsis-promised
+judge-agreement rate; then re-run 08 to fold the rate into RESULTS_SUMMARY.
